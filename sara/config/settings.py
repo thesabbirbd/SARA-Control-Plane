@@ -5,11 +5,12 @@ import yaml
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Optional
+from pydantic import SecretStr
 
 @dataclass
 class Settings:
     sara_env: str = os.getenv("SARA_ENV", "development")
-    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    telegram_bot_token: SecretStr = field(default_factory=lambda: SecretStr(os.getenv("TELEGRAM_BOT_TOKEN", "")))
     telegram_allowed_user_ids: List[int] = field(default_factory=list)
     default_project: Optional[str] = os.getenv("DEFAULT_PROJECT")
     default_agent: str = os.getenv("DEFAULT_AGENT", "antigravity")
