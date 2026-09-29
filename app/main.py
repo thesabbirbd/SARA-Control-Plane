@@ -1487,12 +1487,12 @@ async def post_init(app: Application):
     asyncio.create_task(background_worker())
 
 def main():
-    if not settings.telegram_bot_token:
+    if not settings.telegram_bot_token.get_secret_value():
         print("ERROR: TELEGRAM_settings.telegram_bot_token not set!")
         return
         
     global bot_app
-    bot_app = Application.builder().token(settings.telegram_bot_token).post_init(post_init).build()
+    bot_app = Application.builder().token(settings.telegram_bot_token.get_secret_value()).post_init(post_init).build()
 
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(CommandHandler("help", help_command))
