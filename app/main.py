@@ -102,9 +102,17 @@ async def stale_task_recovery():
                 db.row_factory = aiosqlite.Row
                 async with db.execute("SELECT * FROM tasks WHERE status = 'RUNNING'") as cursor:
                     tasks = await cursor.fetchall()
+
+                interrupted_ids = []
                 for t in tasks:
                     if not is_process_alive(t['pid']):
-                        await transition_task(db, t['id'], "INTERRUPTED")
+                        interrupted_ids.append((t['id'],))
+
+                if interrupted_ids:
+                    await db.executemany(
+                        "UPDATE tasks SET status = 'INTERRUPTED', finished_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        interrupted_ids
+                    )
                 await db.commit()
         except Exception as e:
             print("Stale recovery error:", e)
