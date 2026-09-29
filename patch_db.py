@@ -1,7 +1,9 @@
 import asyncio
 import aiosqlite
+import os
 
-DB_PATH = "/home/thesabbir/Documents/RPA Projects/sabbiR-control-plane/queue.db"
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.environ.get("SARA_DB_PATH", os.path.join(PROJECT_ROOT, "queue.db"))
 
 async def migrate():
     async with aiosqlite.connect(DB_PATH) as db:
