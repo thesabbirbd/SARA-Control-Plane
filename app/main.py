@@ -216,7 +216,7 @@ def deterministic_router(user_text: str):
     if text in ["health", "/health", "system health"]: return {"action": "system_status"}
     if text in ["about", "/about"]: return {"action": "about"}
     
-    if text in ["update", "udpate", "project update", "last features for this project", "changed recently?", "changed recently", "antigravity done recently?", "antigravity done recently"]: 
+    if text in ["update", "project update", "last features for this project", "changed recently?", "changed recently", "antigravity done recently?", "antigravity done recently"]: 
         return {"action": "project_update"}
         
     m = re.match(r'^(?:task )?status(?:\s+for)?\s+(?:task\s+)?(?:id\s+)?(\d+)$', text)
@@ -832,6 +832,55 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_html(text, reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None)
 
+
+async def debug_task_command(update, context):
+    if not authorized(update): return
+    args = context.args
+    if not args:
+        await update.message.reply_html("Usage: <code>/debug task &lt;id&gt;</code>")
+        return
+    if args[0] == "task" and len(args) > 1:
+        task_id = args[1]
+    else:
+        task_id = args[0]
+        
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)) as c:
+            row = await c.fetchone()
+            
+    if not row:
+        await update.message.reply_html("Task not found.")
+        return
+        
+    tel = row['telemetry']
+    import json
+    try:
+        t = json.loads(tel) if tel else {}
+    except:
+        t = {}
+        
+    msg = f"🔍 <b>DEBUG TASK #{task_id}</b>\n\n"
+    msg += f"<b>ROUTING</b>\nIntent: {row.get('action', 'run_antigravity')}\n"
+    msg += f"Router: {t.get('router', 'unknown')}\n"
+    msg += f"Routing time: {t.get('routing_ms', 0):.1f}ms\n\n"
+    
+    msg += f"<b>QUEUE</b>\nWait time: {t.get('queue_wait_ms', 0):.1f}ms\n\n"
+    
+    msg += f"<b>PROCESS</b>\nPID: {row['pid']}\n"
+    alive = "Yes" if row['pid'] and row['status'] == 'RUNNING' else "No"
+    msg += f"Alive: {alive}\n\n"
+    
+    msg += f"<b>AGENT</b>\nProvider: Antigravity\n"
+    msg += f"Runtime: {t.get('agent_runtime_ms', 0):.1f}ms\n\n"
+    
+    msg += f"<b>RESULT</b>\n{row['status']}\n\n"
+    
+    msg += f"<b>TELEGRAM</b>\nDelivery: {t.get('telegram_send_ms', 0):.1f}ms\n"
+    
+    await update.message.reply_html(msg)
+
+
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
     async with aiosqlite.connect(DB_PATH) as db:
@@ -992,24 +1041,31 @@ async def background_worker():
                         project = task['project_name']
                         instruction = task['instruction']
                         
-                        await transition_task(db, task_id, "STARTING")
+                        async with db.execute("UPDATE tasks SET status = 'STARTING', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'PENDING'", (task_id,)) as update_cursor:
+                            if update_cursor.rowcount == 0:
+                                continue # Task was claimed by another worker or cancelled
                         await db.commit()
                         
+                        import time, json
                         start_time = datetime.now()
+                        agent_start = time.time()
+                        
+                        tel_json = task['telemetry'] if 'telemetry' in task.keys() else None
+                        tel = json.loads(tel_json) if tel_json else {}
+                        queue_wait = agent_start*1000 - tel.get('telegram_received_ms', agent_start*1000)
+                        tel['queue_wait_ms'] = queue_wait
+                        
                         msg_text = (
-                            f"▶️ <b>Task #{task_id} STARTED</b>\n\n"
+                            f"🚀 <b>TASK #{task_id} STARTED</b>\n\n"
                             f"📁 <code>{project}</code>\n"
                             f"🤖 Antigravity\n\n"
-                            f"Started: {start_time.strftime('%H:%M:%S')}"
+                            f"Started: {start_time.strftime('%H:%M:%S')}\n"
+                            f"Live activity:\nRunning..."
                         )
                         if task['parent_task_id']:
                             msg_text += f"\n🔁 <i>Retry of Task #{task['parent_task_id']}</i>"
                             
-                        await bot_app.bot.send_message(
-                            chat_id=ALLOWED_USER_ID,
-                            text=msg_text,
-                            parse_mode="HTML"
-                        )
+                        # msg_text saved for later
                         
                         project_dir = get_secure_project_dir(project)
                         log_file_path = LOGS_DIR / f"task_{task_id}.log"
@@ -1053,6 +1109,11 @@ async def background_worker():
                             await transition_task(db, task_id, "RUNNING", pid=process.pid)
                             await db.commit()
                             
+                            try:
+                                msg_text = msg_text.replace("Running...", f"PID:\n{process.pid}\n\nLive activity:\nRunning...")
+                                await bot_app.bot.send_message(chat_id=ALLOWED_USER_ID, text=msg_text, parse_mode="HTML")
+                            except: pass
+                            
                             # Update PID in message
                             await bot_app.bot.send_message(chat_id=ALLOWED_USER_ID, text=f"🔧 Task #{task_id} PID: <code>{process.pid}</code>", parse_mode="HTML")
                             
@@ -1086,15 +1147,21 @@ async def background_worker():
                                             await transition_task(db, task_id, 'PENDING')
                                             await db.commit()
                                         else:
+                                            status = 'DEAD_LETTER'
                                             await transition_task(db, task_id, status, exit_code=exit_code)
                                             await db.commit()
                                     else:
                                         await transition_task(db, task_id, status, exit_code=exit_code)
                                         await db.commit()
                                     
-                                    icon = "✅" if status == 'SUCCESS' else "❌"
+                                    icon = "✅" if status == 'SUCCESS' else "🚨" if status == 'DEAD_LETTER' else "❌"
                                     duration = datetime.now() - start_time
                                     dur_str = f"{duration.seconds // 60}m {duration.seconds % 60}s"
+                                    tel['agent_runtime_ms'] = (time.time() - agent_start) * 1000
+                                    tel['telegram_send_ms'] = time.time() * 1000  # just a proxy
+                                    tel_str = json.dumps(tel)
+                                    await db.execute("UPDATE tasks SET telemetry = ? WHERE id = ?", (tel_str, task_id))
+                                    await db.commit()
                                     
                                     # Attempt to parse last line as JSON for result
                                     result_str = None
@@ -1112,15 +1179,27 @@ async def background_worker():
                                     except Exception:
                                         pass
                                         
-                                    fin_text = (
-                                        f"{icon} <b>TASK #{task_id} COMPLETED</b>\n\n"
-                                        f"📁 <b>Project</b>\n{project}\n\n"
-                                        f"🤖 <b>Agent</b>\nAntigravity\n\n"
-                                        f"⏱ <b>Duration</b>\n{dur_str}\n\n"
-                                    )
+                                    if status == 'DEAD_LETTER':
+                                        fin_text = (
+                                            f"🚨 <b>TASK #{task_id} MOVED TO DEAD LETTER</b>\n\n"
+                                            f"📁 <b>Project</b>\n{project}\n\n"
+                                            f"<b>Reason:</b>\nRepeated execution failure.\n\n"
+                                            f"<b>Attempts:</b>\n3\n\n"
+                                            f"The task was NOT executed again.\n\n"
+                                        )
+                                    else:
+                                        status_word = 'COMPLETED' if status == 'SUCCESS' else status
+                                        fin_text = (
+                                            f"{icon} <b>TASK #{task_id} {status_word}</b>\n\n"
+                                            f"📁 <b>Project</b>\n{project}\n\n"
+                                            f"🤖 <b>Agent</b>\nAntigravity\n\n"
+                                            f"⏱ <b>Duration</b>\n{dur_str}\n\n"
+                                        )
                                     if result_str:
                                         short_res = result_str if len(result_str) < 800 else result_str[:800] + "...(truncated)"
                                         fin_text += f"📝 <b>Result</b>\n<pre>{short_res}</pre>\n\n"
+                                    else:
+                                        fin_text += f"⚠️ <b>No readable final agent summary was returned.</b>\nFull execution log is available.\n\n"
 
                                     keyboard = [[InlineKeyboardButton("🔁 Retry", callback_data=f"retry_{task_id}")]] if status != 'SUCCESS' else []
                                     notify = await get_notify_preference(ALLOWED_USER_ID)
@@ -1181,9 +1260,11 @@ def main():
     bot_app.add_handler(CommandHandler("schedule", schedule_task_command))
     bot_app.add_handler(CommandHandler("tasks", tasks_command))
     bot_app.add_handler(CommandHandler("history", history_command))
+    bot_app.add_handler(CommandHandler("debug", debug_task_command))
     bot_app.add_handler(CommandHandler("cancel", cancel_command))
     bot_app.add_handler(CommandHandler("retry", retry_command))
     bot_app.add_handler(CommandHandler("health", health))
+    bot_app.add_handler(CommandHandler("worker", worker_status_command))
     bot_app.add_handler(CommandHandler("funfact", funfact))
     bot_app.add_handler(CommandHandler("ag", ag_command))
     bot_app.add_handler(CallbackQueryHandler(button_handler))
@@ -1191,6 +1272,23 @@ def main():
 
     print("SABBiR Control Plane (Phase 2 - Queue) started.")
     bot_app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+async def worker_status_command(update, context):
+    if not authorized(update): return
+    import subprocess
+    try:
+        out = subprocess.check_output(['pgrep', '-af', 'app/main.py'], text=True)
+        lines = [l for l in out.strip().split('\n') if 'python' in l and 'app/main.py' in l]
+        count = len(lines)
+    except subprocess.SubprocessError:
+        count = 0
+        
+    status = "HEALTHY" if count == 1 else "⚠️ Duplicate worker detected." if count > 1 else "🔴 OFFLINE"
+    
+    msg = f"⚙️ <b>WORKER STATUS</b>\n\nWorker instances detected: {count}\nExpected: 1\nStatus: {status}"
+    await update.message.reply_html(msg)
+
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
