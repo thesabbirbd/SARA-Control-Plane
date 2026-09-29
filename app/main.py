@@ -9,6 +9,16 @@ import asyncio
 import json
 import re
 import signal
+from pydantic import BaseModel, Field, ValidationError
+from typing import Optional, Any
+
+class IntentSchema(BaseModel):
+    action: str
+    project: Optional[str] = None
+    instruction: Optional[str] = None
+    task_id: Optional[Any] = None
+    message: Optional[str] = None
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import aiosqlite
 import random
@@ -529,11 +539,12 @@ async def parse_intent_with_gemini(user_text: str, current_project: str = None) 
             print(f"RAW GEMINI: {raw_text}")
 
             match = re.search(r'\{.*\}', raw_text, re.DOTALL)
-            if match:
-                return json.loads(match.group(0))
-            else:
-                return json.loads(raw_text)
+            json_str = match.group(0) if match else raw_text
+            parsed = json.loads(json_str)
+            return IntentSchema(**parsed).model_dump()
 
+    except ValidationError as e:
+        return {"action": "api_error", "message": f"Invalid schema returned from Gemini: {e.errors()}"}
     except Exception as e:
         return {"action": "api_error", "message": f"{type(e).__name__}: {str(e)}"}
 
