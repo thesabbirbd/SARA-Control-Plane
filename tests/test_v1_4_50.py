@@ -1,3 +1,4 @@
+import uuid
 import pytest
 import asyncio
 from sara.runtime.supervisor import SupervisorService, MultiAgentRouter, ObjectiveState
@@ -61,7 +62,8 @@ async def test_deployment_orchestration():
 @pytest.mark.asyncio
 async def test_worker_load_balancer():
     # Register a worker with some capabilities
-    wid = await WorkerRegistry.register_worker("node-load", "linux", ["docker", "agy"])
+    cap = f"agy-{uuid.uuid4()}"
+    wid = await WorkerRegistry.register_worker("node-load", "linux", ["docker", cap])
     
     # Inject fake metrics
     from sara.database.core import get_db
@@ -72,5 +74,5 @@ async def test_worker_load_balancer():
         )
         await db.commit()
         
-    best_worker = await WorkerDispatcher.get_least_loaded_worker("agy")
+    best_worker = await WorkerDispatcher.get_least_loaded_worker(cap)
     assert best_worker == wid

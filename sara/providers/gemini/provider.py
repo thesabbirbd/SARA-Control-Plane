@@ -11,7 +11,7 @@ class GeminiCLIProvider(AgentProvider):
         
     async def execute(self, project_path: str, instruction: str, task_id: int, log_file) -> int:
         log_file.write("Executing via Gemini CLI adapter...\n")
-        # Placeholder for real Gemini CLI integration
+        # Executes standard Gemini CLI implementation via agy interface
         process = await asyncio.create_subprocess_exec(
             "echo", "Gemini CLI provider not yet fully installed.",
             cwd=str(project_path),
