@@ -153,9 +153,18 @@ def get_projects():
         return []
     return [d.name for d in BASE_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")]
 
+def get_secure_project_dir(project_name: str) -> Path | None:
+    try:
+        proj_dir = (BASE_DIR / project_name).resolve()
+        if proj_dir.is_relative_to(BASE_DIR) and proj_dir != BASE_DIR:
+            return proj_dir
+    except Exception:
+        pass
+    return None
+
 def get_git_info(project_name: str):
-    proj_dir = BASE_DIR / project_name
-    if not (proj_dir / ".git").exists():
+    proj_dir = get_secure_project_dir(project_name)
+    if not proj_dir or not (proj_dir / ".git").exists():
         return None
     try:
         import subprocess
@@ -233,7 +242,10 @@ async def new_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_html("Usage: <code>/new &lt;project_name&gt;</code>")
         return
     project_name = context.args[0]
-    proj_dir = BASE_DIR / project_name
+    proj_dir = get_secure_project_dir(project_name)
+    if not proj_dir:
+        await update.message.reply_html(f"❌ Invalid project name: <b>{project_name}</b>")
+        return
     if proj_dir.exists():
         await update.message.reply_html(f"⚠️ Project <b>{project_name}</b> already exists!")
         return
@@ -844,12 +856,17 @@ async def background_worker():
                             parse_mode="HTML"
                         )
                         
-                        project_dir = BASE_DIR / project
+                        project_dir = get_secure_project_dir(project)
                         log_file_path = LOGS_DIR / f"task_{task_id}.log"
                         
                         await db.execute("UPDATE tasks SET log_path = ? WHERE id = ?", (str(log_file_path), task_id))
                         await db.commit()
                         
+                        if not project_dir:
+                            await db.execute("UPDATE tasks SET status = 'FAILED', error_message = ? WHERE id = ?", (f"Invalid project name: {project}", task_id))
+                            await db.commit()
+                            continue
+
                         if not project_dir.exists():
                             await transition_task(db, task_id, "FAILED", error_msg=f"Project not found: {project_dir}")
                             await db.commit()
