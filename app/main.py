@@ -162,15 +162,30 @@ def get_secure_project_dir(project_name: str) -> Path | None:
         pass
     return None
 
-def get_git_info(project_name: str):
+async def get_git_info(project_name: str):
     proj_dir = get_secure_project_dir(project_name)
     if not proj_dir or not (proj_dir / ".git").exists():
         return None
     try:
+        import asyncio
         import subprocess
-        branch = subprocess.check_output(["git", "branch", "--show-current"], cwd=str(proj_dir), stderr=subprocess.DEVNULL).decode().strip()
-        status = subprocess.check_output(["git", "status", "--porcelain"], cwd=str(proj_dir), stderr=subprocess.DEVNULL).decode().strip()
-        commit = subprocess.check_output(["git", "log", "-1", "--format=%h - %s"], cwd=str(proj_dir), stderr=subprocess.DEVNULL).decode().strip()
+
+        async def run_git_cmd(*args):
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                cwd=str(proj_dir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL
+            )
+            stdout, _ = await proc.communicate()
+            return stdout.decode().strip()
+
+        branch, status, commit = await asyncio.gather(
+            run_git_cmd("git", "branch", "--show-current"),
+            run_git_cmd("git", "status", "--porcelain"),
+            run_git_cmd("git", "log", "-1", "--format=%h - %s")
+        )
+
         return {
             "branch": branch,
             "clean": len(status) == 0,
@@ -502,8 +517,7 @@ async def task_result_command(update, context, task_id):
 async def project_update_command(update, context, project_name):
     # Deterministic Project update based on Git + Tasks
     try:
-        from sara.core.projects import get_git_info
-        git_info = get_git_info(project_name)
+        git_info = await get_git_info(project_name)
     except:
         git_info = None
         
@@ -924,7 +938,7 @@ async def project_status_command(update: Update, context: ContextTypes.DEFAULT_T
         return
     project = context.args[0]
     
-    git_info = get_git_info(project)
+    git_info = await get_git_info(project)
     if git_info is None:
         await (update.message or update.callback_query.message).reply_html(f"❌ Project <b>{project}</b> not found or has no Git repository.")
         return
