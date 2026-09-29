@@ -204,24 +204,53 @@ def resolve_project_alias(text: str) -> str:
 
 def deterministic_router(user_text: str):
     text = user_text.lower().strip()
+    # Strip common question prefixes
+    text = re.sub(r'^(what is|whats|what\'s|show|tell me)\s+(the\s+)?', '', text).strip()
+    
     if text in ["help", "/help"]: return {"action": "help"}
     if text in ["start", "/start"]: return {"action": "start"}
-    if text in ["status", "/status", "system status"]: return {"action": "system_status"}
-    if text in ["tasks", "/tasks", "queue", "show tasks"]: return {"action": "list_tasks"}
+    if text in ["status", "/status", "system status", "control plane status"]: return {"action": "system_status"}
+    if text in ["tasks", "/tasks", "queue", "show tasks", "what is running right now", "running right now", "running tasks"]: return {"action": "list_tasks"}
     if text in ["history", "/history"]: return {"action": "history"}
     if text in ["projects", "/projects"]: return {"action": "list_projects"}
-    if text in ["health", "/health"]: return {"action": "system_status"}
+    if text in ["health", "/health", "system health"]: return {"action": "system_status"}
     if text in ["about", "/about"]: return {"action": "about"}
-    m = re.match(r'^(?:task )?status(?:\s+for)?\s+(?:task\s+)?(\d+)$', text)
+    
+    if text in ["update", "udpate", "project update", "last features for this project", "changed recently?", "changed recently", "antigravity done recently?", "antigravity done recently"]: 
+        return {"action": "project_update"}
+        
+    m = re.match(r'^(?:task )?status(?:\s+for)?\s+(?:task\s+)?(?:id\s+)?(\d+)$', text)
     if m: return {"action": "task_status", "task_id": int(m.group(1))}
+    
     m = re.match(r'^(?:cancel|stop)(?:\s+task)?\s+(\d+)$', text)
     if m: return {"action": "cancel_task", "task_id": int(m.group(1))}
+    
     m = re.match(r'^(?:retry|run again)(?:\s+task)?\s+(\d+)$', text)
     if m: return {"action": "retry_task", "task_id": int(m.group(1))}
+    
     m = re.match(r'^(?:project )?status(?:\s+for)?\s+([a-z0-9_-]+)$', text)
     if m:
         p = resolve_project_alias(m.group(1))
         if p: return {"action": "project_status", "project": p}
+        
+    # Artifacts (Logs)
+    m = re.match(r'^(?:send|give|show) (?:me )?(?:the )?(?:latest )?task (\d+) log(?: file)?(?: in chat)?$', user_text.lower().strip())
+    if not m: m = re.match(r'^(?:send|give) (?:me )?log(?: for)? task (\d+)$', user_text.lower().strip())
+    if not m: m = re.match(r'^send task (\d+) log$', user_text.lower().strip())
+    # Handle stripped prefix version
+    if not m: m = re.match(r'^(?:latest )?task (\d+) log(?: file)?(?: in chat)?$', text)
+    if m: return {"action": "send_log", "task_id": int(m.group(1))}
+    
+    # Latest log
+    if text in ["latest log", "latest task log", "send latest log", "send me the latest task log"]:
+        return {"action": "send_latest_log"}
+        
+    # Task Output
+    m = re.match(r'^(?:show|send) (?:me )?(?:the )?output (?:from|for) task (\d+)$', user_text.lower().strip())
+    if not m: m = re.match(r'^show task (\d+) output$', user_text.lower().strip())
+    if not m: m = re.match(r'^output (?:from|for) task (\d+)$', text)
+    if m: return {"action": "task_result", "task_id": int(m.group(1))}
+        
     return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -234,12 +263,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🧠 Ollama: Ready\n\n"
         "Choose an action below or simply type what you want me to do."
     )
-    await update.message.reply_html(text, reply_markup=get_dashboard_keyboard())
+    await (update.message or update.callback_query.message).reply_html(text, reply_markup=get_dashboard_keyboard())
 
 async def new_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
     if not context.args:
-        await update.message.reply_html("Usage: <code>/new &lt;project_name&gt;</code>")
+        await (update.message or update.callback_query.message).reply_html("Usage: <code>/new &lt;project_name&gt;</code>")
         return
     project_name = context.args[0]
     proj_dir = get_secure_project_dir(project_name)
@@ -247,16 +276,16 @@ async def new_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_html(f"❌ Invalid project name: <b>{project_name}</b>")
         return
     if proj_dir.exists():
-        await update.message.reply_html(f"⚠️ Project <b>{project_name}</b> already exists!")
+        await (update.message or update.callback_query.message).reply_html(f"⚠️ Project <b>{project_name}</b> already exists!")
         return
     proj_dir.mkdir(parents=True, exist_ok=True)
-    await update.message.reply_html(f"✅ Successfully created new project: <b>{project_name}</b>")
+    await (update.message or update.callback_query.message).reply_html(f"✅ Successfully created new project: <b>{project_name}</b>")
 
 async def list_projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
     projects = get_projects()
     if not projects:
-        await update.message.reply_html("No projects found.")
+        await (update.message or update.callback_query.message).reply_html("No projects found.")
         return
         
     user_id = update.effective_user.id
@@ -271,7 +300,7 @@ async def list_projects_command(update: Update, context: ContextTypes.DEFAULT_TY
     for p in projects:
         keyboard.append([InlineKeyboardButton(f"⭐ Set Active: {p}", callback_data=f"set_active_{p}")])
         
-    await update.message.reply_html(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    await (update.message or update.callback_query.message).reply_html(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
@@ -291,7 +320,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<code>/new &lt;name&gt;</code> - Create new project\n"
         "<code>/projects</code> - List projects"
     )
-    await update.message.reply_html(text)
+    await (update.message or update.callback_query.message).reply_html(text)
 
 
 VALID_TRANSITIONS = {
@@ -346,7 +375,7 @@ async def queue_task(update: Update, project: str, instruction: str):
         task_id = cursor.lastrowid
         await db.commit()
     
-    await update.message.reply_html(
+    await (update.message or update.callback_query.message).reply_html(
         f"✅ <b>Task added to queue (ID: {task_id})</b>\n"
         f"📁 Project: <code>{project}</code>\n"
         f"📝 Instruction: <i>{instruction}</i>\n"
@@ -356,7 +385,7 @@ async def queue_task(update: Update, project: str, instruction: str):
 async def ag_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
     if len(context.args) < 2:
-        await update.message.reply_html("Usage: <code>/ag &lt;project&gt; &lt;instruction&gt;</code>")
+        await (update.message or update.callback_query.message).reply_html("Usage: <code>/ag &lt;project&gt; &lt;instruction&gt;</code>")
         return
     project = context.args[0]
     instruction = " ".join(context.args[1:])
@@ -415,6 +444,87 @@ async def parse_intent_with_gemini(user_text: str, current_project: str = None) 
     except Exception as e:
         return {"action": "api_error", "message": f"{type(e).__name__}: {str(e)}"}
 
+
+async def send_log_command(update, context, task_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT project_name, log_path FROM tasks WHERE id = ?", (task_id,)) as c:
+            row = await c.fetchone()
+    if not row or not row['log_path']:
+        await (update.message or update.callback_query.message).reply_html(f"⚠️ <b>Log unavailable</b>\n\nTask #{task_id} exists,\nbut its log file could not be found.")
+        return
+    log_file = Path(row['log_path'])
+    if not log_file.exists():
+        await (update.message or update.callback_query.message).reply_html(f"⚠️ <b>Log unavailable</b>\n\nTask #{task_id} log file is missing from disk.")
+        return
+    
+    caption = f"📎 <b>TASK #{task_id} LOG</b>\n\nProject:\n{row['project_name']}\n\nFile:\n{log_file.name}\n\nSize:\n{log_file.stat().st_size / 1024:.1f} KB"
+    await (update.message or update.callback_query.message).reply_document(document=open(log_file, 'rb'), caption=caption, parse_mode='HTML')
+
+async def send_latest_log_command(update, context):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT id FROM tasks WHERE log_path IS NOT NULL ORDER BY id DESC LIMIT 1") as c:
+            row = await c.fetchone()
+    if not row:
+        await (update.message or update.callback_query.message).reply_html("⚠️ No tasks with logs found.")
+        return
+    await send_log_command(update, context, row['id'])
+
+async def task_result_command(update, context, task_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)) as c:
+            row = await c.fetchone()
+            
+    if not row:
+        await (update.message or update.callback_query.message).reply_html(f"❌ Task #{task_id} not found.")
+        return
+        
+    status = row['status']
+    icon = "✅" if status == "SUCCESS" else "❌" if status == "FAILED" else "▶️" if status == "RUNNING" else "⏳"
+    
+    # Extract actual result if it exists (from log if short enough, or from a new 'result' column if we added it)
+    log_content = "No output available."
+    if row['log_path']:
+        p = Path(row['log_path'])
+        if p.exists():
+            try:
+                log_content = p.read_text(errors='replace')
+                if len(log_content) > 1000:
+                    log_content = log_content[-1000:] + "\n...(truncated)"
+            except:
+                pass
+                
+    result_text = f"{icon} <b>TASK #{task_id} {status}</b>\n\n<b>Result:</b>\n<pre>{log_content}</pre>"
+    await (update.message or update.callback_query.message).reply_html(result_text)
+
+async def project_update_command(update, context, project_name):
+    # Deterministic Project update based on Git + Tasks
+    try:
+        from sara.core.projects import get_git_info
+        git_info = get_git_info(project_name)
+    except:
+        git_info = None
+        
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT id, status FROM tasks WHERE project_name = ? ORDER BY id DESC LIMIT 5", (project_name,)) as c:
+            tasks = await c.fetchall()
+            
+    task_str = ""
+    for t in tasks:
+        icon = "✅" if t['status'] == "SUCCESS" else "❌" if t['status'] == "FAILED" else "▶️"
+        task_str += f"{icon} #{t['id']}\n"
+        
+    git_str = "Not available"
+    if git_info:
+        git_str = f"Branch: {git_info['branch']}\nWorking tree: {'Clean' if git_info['clean'] else 'Modified'}\nLatest commit: {git_info['commit']}"
+        
+    msg = f"📌 <b>PROJECT UPDATE</b>\n\n📁 <b>{project_name}</b>\n\n<b>Recent tasks:</b>\n{task_str}\n<b>Git:</b>\n{git_str}"
+    await (update.message or update.callback_query.message).reply_html(msg)
+
+
 async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
     user_text = update.message.text
@@ -437,44 +547,49 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
     elif user_text == "🔔 Notifications":
         new_val = await toggle_notify_preference(update.effective_user.id)
         state = "ON 🟢" if new_val else "OFF 🔴"
-        await update.message.reply_html(f"🔔 Antigravity Task Notifications are now <b>{state}</b>.")
+        await (update.message or update.callback_query.message).reply_html(f"🔔 Antigravity Task Notifications are now <b>{state}</b>.")
         return
     elif user_text == "⏰ Schedule":
-        await update.message.reply_html("Use <code>/schedule HH:MM &lt;project&gt; &lt;task&gt;</code> for now.")
+        await (update.message or update.callback_query.message).reply_html("Use <code>/schedule HH:MM &lt;project&gt; &lt;task&gt;</code> for now.")
         return
     elif user_text == "🚀 Run Task":
         user_id = update.effective_user.id
         active_proj = await get_active_project(user_id)
         if active_proj:
-            await update.message.reply_html(f"⭐ Active project is <b>{active_proj}</b>.\nJust type your task instructions and I'll send it to Antigravity!")
+            await (update.message or update.callback_query.message).reply_html(f"⭐ Active project is <b>{active_proj}</b>.\nJust type your task instructions and I'll send it to Antigravity!")
         else:
-            await update.message.reply_html("Select a project from <b>📁 Projects</b> first, then type what you want me to do!")
+            await (update.message or update.callback_query.message).reply_html("Select a project from <b>📁 Projects</b> first, then type what you want me to do!")
         return
 
-    status_msg = await update.message.reply_markdown("🧠 *Thinking...*")
+    status_msg = await (update.message or update.callback_query.message).reply_markdown("🧠 *Thinking...*")
     
     intent = deterministic_router(user_text)
     
     if not intent:
         try:
+            from sara.config.settings import settings
             user_id = update.effective_user.id
             active_proj = await get_active_project(user_id)
-            intent = await parse_intent_with_gemini(user_text, active_proj)
+            if settings.ollama_enabled:
+                from sara.router.nlp import parse_intent_with_ollama
+                intent = await parse_intent_with_ollama(user_text, active_proj)
+            else:
+                intent = None
         except Exception as e:
-            print(f"Gemini parsing failed: {e}")
+            print(f"NLP parsing failed: {e}")
             intent = {"action": "api_error"}
             
     action = intent.get("action") if intent else "unknown"
     
     # Fallback directly to Antigravity if the intent is unknown or Gemini fails
-    if action in ("unknown", "api_error") or not intent:
+    if action in ("unknown", "api_error", "run_antigravity") or not intent:
         user_id = update.effective_user.id
         active_proj = await get_active_project(user_id)
         if active_proj:
             await status_msg.edit_text(f"🤖 **Direct Fallback**\nSending to Antigravity on `[{active_proj}]`...", parse_mode="Markdown")
             await queue_task(update, active_proj, user_text)
         else:
-            await status_msg.edit_text("❌ I didn't understand the command, and Gemini API is unreachable/failing. Please set an active project first from 📁 Projects to send direct tasks.")
+            await status_msg.edit_text("❌ I didn't understand the command, and NLP parsing is unreachable/failing or disabled. Please set an active project first from 📁 Projects to send direct tasks.")
         return
     elif action == "about":
         await status_msg.edit_text("🟢 **SABBiR Control Plane**\nLocal automation controller\nTelegram → Queue → Antigravity", parse_mode="Markdown")
@@ -503,6 +618,31 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
             await task_status_command(update, context)
         else:
             await status_msg.edit_text("❌ Missing task ID.")
+        return
+    elif action == "send_log":
+        task_id = intent.get("task_id")
+        await status_msg.delete()
+        if task_id:
+            await send_log_command(update, context, task_id)
+        return
+    elif action == "send_latest_log":
+        await status_msg.delete()
+        await send_latest_log_command(update, context)
+        return
+    elif action == "task_result":
+        task_id = intent.get("task_id")
+        await status_msg.delete()
+        if task_id:
+            await task_result_command(update, context, task_id)
+        return
+    elif action == "project_update":
+        await status_msg.delete()
+        user_id = update.effective_user.id
+        active_proj = await get_active_project(user_id)
+        if not active_proj:
+            await (update.message or update.callback_query.message).reply_html("❌ No active project set. Select one from <b>📁 Projects</b> first.")
+        else:
+            await project_update_command(update, context, active_proj)
         return
     elif action == "project_status":
         project = intent.get("project")
@@ -577,7 +717,7 @@ async def scheduled_db_insert(project, instruction):
 async def schedule_task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
     if len(context.args) < 3:
-        await update.message.reply_html("Usage: <code>/schedule HH:MM &lt;project&gt; &lt;instruction&gt;</code>")
+        await (update.message or update.callback_query.message).reply_html("Usage: <code>/schedule HH:MM &lt;project&gt; &lt;instruction&gt;</code>")
         return
         
     time_str = context.args[0]
@@ -592,9 +732,9 @@ async def schedule_task_command(update: Update, context: ContextTypes.DEFAULT_TY
             run_time += timedelta(days=1)
             
         scheduler.add_job(scheduled_db_insert, 'date', run_date=run_time, args=[project, instruction])
-        await update.message.reply_html(f"⏰ Task scheduled for <b>{run_time.strftime('%Y-%m-%d %H:%M')}</b>.\nIt will automatically enter the queue at that time.")
+        await (update.message or update.callback_query.message).reply_html(f"⏰ Task scheduled for <b>{run_time.strftime('%Y-%m-%d %H:%M')}</b>.\nIt will automatically enter the queue at that time.")
     except Exception as e:
-        await update.message.reply_html(f"❌ Invalid time format. Use HH:MM (24-hour). Error: {e}")
+        await (update.message or update.callback_query.message).reply_html(f"❌ Invalid time format. Use HH:MM (24-hour). Error: {e}")
 
 import time
 
@@ -638,7 +778,7 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             await update.callback_query.answer("Already up to date.")
     else:
-        await update.message.reply_html(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        await (update.message or update.callback_query.message).reply_html(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def funfact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
@@ -649,30 +789,45 @@ async def funfact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "There are over 700 programming languages, but just 10 of them dominate 80% of software development.",
         "Google's first storage rack for its servers was built using Lego bricks."
     ]
-    await update.message.reply_html(f"💡 <b>Fun Fact:</b>\n{random.choice(facts)}")
+    await (update.message or update.callback_query.message).reply_html(f"💡 <b>Fun Fact:</b>\n{random.choice(facts)}")
 
 async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM tasks WHERE status IN ('PENDING', 'RUNNING') ORDER BY created_at ASC LIMIT 10") as cursor:
+        async with db.execute("SELECT * FROM tasks ORDER BY id DESC LIMIT 15") as cursor:
             tasks = await cursor.fetchall()
             
     if not tasks:
         await update.message.reply_html("✅ <b>Queue is empty.</b>")
         return
         
-    text = "📋 <b>ACTIVE QUEUE</b>\n\n"
-    for t in tasks:
-        if t['status'] == 'RUNNING':
-            text += f"▶️ <b>#{t['id']} {t['project_name']}</b>\n   <i>Running...</i>\n\n"
-        else:
-            text += f"⏳ <b>#{t['id']} {t['project_name']}</b>\n   <i>Pending...</i>\n\n"
-            
-    text += "<i>(Showing up to 10 tasks)</i>\n"
+    text = "📋 <b>TASK CENTER</b>\n\n"
+    
+    running = [t for t in tasks if t['status'] == 'RUNNING']
+    pending = [t for t in tasks if t['status'] == 'PENDING']
+    failed = [t for t in tasks if t['status'] == 'FAILED']
+    completed = [t for t in tasks if t['status'] == 'SUCCESS']
+    
+    if running:
+        text += "▶️ <b>RUNNING</b>\n"
+        for t in running: text += f"#{t['id']} {t['project_name']} - <i>{t['instruction'][:30]}...</i>\n"
+        text += "\n"
+    if pending:
+        text += "⏳ <b>PENDING</b>\n"
+        for t in pending: text += f"#{t['id']} {t['project_name']} - <i>{t['instruction'][:30]}...</i>\n"
+        text += "\n"
+    if failed:
+        text += "❌ <b>FAILED</b>\n"
+        for t in failed[:3]: text += f"#{t['id']} {t['project_name']} - <i>{t['instruction'][:30]}...</i>\n"
+        text += "\n"
+    if completed:
+        text += "✅ <b>COMPLETED</b>\n"
+        for t in completed[:3]: text += f"#{t['id']} {t['project_name']} - <i>{t['instruction'][:30]}...</i>\n"
+        text += "\n"
     
     keyboard = []
-    if any(t['status'] == 'PENDING' for t in tasks):
+    if pending:
         keyboard.append([InlineKeyboardButton("🧹 Clear Pending", callback_data="clear_queue")])
     
     await update.message.reply_html(text, reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None)
@@ -685,7 +840,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tasks = await cursor.fetchall()
             
     if not tasks:
-        await update.message.reply_html("📚 <b>History is empty.</b>")
+        await (update.message or update.callback_query.message).reply_html("📚 <b>History is empty.</b>")
         return
         
     text = "📚 <b>TASK HISTORY</b>\n\n"
@@ -693,12 +848,12 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         icon = "✅" if t['status'] == 'SUCCESS' else "❌" if t['status'] == 'FAILED' else "⏹"
         text += f"{icon} <b>#{t['id']} {t['project_name']}</b> ({t['status']})\n   <i>{t['instruction'][:50]}...</i>\n\n"
         
-    await update.message.reply_html(text)
+    await (update.message or update.callback_query.message).reply_html(text)
 
 async def task_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
     if not context.args:
-        await update.message.reply_html("Usage: <code>/taskstatus &lt;id&gt;</code>")
+        await (update.message or update.callback_query.message).reply_html("Usage: <code>/taskstatus &lt;id&gt;</code>")
         return
     task_id = context.args[0]
     async with aiosqlite.connect(DB_PATH) as db:
@@ -706,23 +861,23 @@ async def task_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         async with db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)) as cursor:
             task = await cursor.fetchone()
     if not task:
-        await update.message.reply_html(f"❌ Task <b>#{task_id}</b> not found.")
+        await (update.message or update.callback_query.message).reply_html(f"❌ Task <b>#{task_id}</b> not found.")
         return
     
     icon = "⏳" if task['status'] == 'PENDING' else "▶️" if task['status'] == 'RUNNING' else "✅" if task['status'] == 'SUCCESS' else "❌"
     text = f"{icon} <b>Task #{task['id']}</b>\nProject: <code>{task['project_name']}</code>\nStatus: <b>{task['status']}</b>\nInstruction: <i>{task['instruction']}</i>"
-    await update.message.reply_html(text)
+    await (update.message or update.callback_query.message).reply_html(text)
 
 async def project_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
     if not context.args:
-        await update.message.reply_html("Usage: <code>/projectstatus &lt;project&gt;</code>")
+        await (update.message or update.callback_query.message).reply_html("Usage: <code>/projectstatus &lt;project&gt;</code>")
         return
     project = context.args[0]
     
     git_info = get_git_info(project)
     if git_info is None:
-        await update.message.reply_html(f"❌ Project <b>{project}</b> not found or has no Git repository.")
+        await (update.message or update.callback_query.message).reply_html(f"❌ Project <b>{project}</b> not found or has no Git repository.")
         return
         
     status_icon = "🟢 Clean" if git_info['clean'] else "🟡 Uncommitted Changes"
@@ -740,12 +895,12 @@ async def project_status_command(update: Update, context: ContextTypes.DEFAULT_T
             active_tasks = (await cursor.fetchone())[0]
             
     text += f"Active Tasks: <b>{active_tasks}</b>"
-    await update.message.reply_html(text)
+    await (update.message or update.callback_query.message).reply_html(text)
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
     if not context.args:
-        await update.message.reply_html("Usage: <code>/cancel &lt;id&gt;</code>")
+        await (update.message or update.callback_query.message).reply_html("Usage: <code>/cancel &lt;id&gt;</code>")
         return
     task_id = context.args[0]
     
@@ -755,11 +910,11 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             task = await cursor.fetchone()
             
     if not task:
-        await update.message.reply_html(f"❌ Task <b>#{task_id}</b> not found.")
+        await (update.message or update.callback_query.message).reply_html(f"❌ Task <b>#{task_id}</b> not found.")
         return
         
     if task['status'] not in ['PENDING', 'STARTING', 'RUNNING']:
-        await update.message.reply_html(f"⚠️ Task #{task_id} is already <b>{task['status']}</b>.")
+        await (update.message or update.callback_query.message).reply_html(f"⚠️ Task #{task_id} is already <b>{task['status']}</b>.")
         return
         
     async with aiosqlite.connect(DB_PATH) as db:
@@ -776,12 +931,12 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await transition_task(db, task_id, "CANCELLED")
         await db.commit()
         
-    await update.message.reply_html(f"🛑 Task <b>#{task_id}</b> cancelled safely.")
+    await (update.message or update.callback_query.message).reply_html(f"🛑 Task <b>#{task_id}</b> cancelled safely.")
 
 async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
     if not context.args:
-        await update.message.reply_html("Usage: <code>/retry &lt;id&gt;</code>")
+        await (update.message or update.callback_query.message).reply_html("Usage: <code>/retry &lt;id&gt;</code>")
         return
     task_id = context.args[0]
     
@@ -791,11 +946,11 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             task = await cursor.fetchone()
             
     if not task:
-        await update.message.reply_html(f"❌ Task <b>#{task_id}</b> not found.")
+        await (update.message or update.callback_query.message).reply_html(f"❌ Task <b>#{task_id}</b> not found.")
         return
         
     if task['status'] in ['PENDING', 'RUNNING', 'STARTING']:
-        await update.message.reply_html(f"⚠️ Task #{task_id} is currently <b>{task['status']}</b>. Cannot retry.")
+        await (update.message or update.callback_query.message).reply_html(f"⚠️ Task #{task_id} is currently <b>{task['status']}</b>. Cannot retry.")
         return
         
     async with aiosqlite.connect(DB_PATH) as db:
@@ -806,7 +961,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor2 = await db.execute("SELECT last_insert_rowid()"); new_id = (await cursor2.fetchone())[0]
         await db.commit()
         
-    await update.message.reply_html(f"🔁 <b>Task Queued for Retry</b>\nOld Task: #{task_id}\nNew Task: #{new_id}\n\n<i>Worker will pick this up shortly.</i>")
+    await (update.message or update.callback_query.message).reply_html(f"🔁 <b>Task Queued for Retry</b>\nOld Task: #{task_id}\nNew Task: #{new_id}\n\n<i>Worker will pick this up shortly.</i>")
 
 async def background_worker():
     print("Background worker started.")
@@ -941,12 +1096,32 @@ async def background_worker():
                                     duration = datetime.now() - start_time
                                     dur_str = f"{duration.seconds // 60}m {duration.seconds % 60}s"
                                     
+                                    # Attempt to parse last line as JSON for result
+                                    result_str = None
+                                    try:
+                                        with open(log_file_path, "r") as lf:
+                                            lines = lf.readlines()
+                                            if lines:
+                                                import json
+                                                last_line = lines[-1].strip()
+                                                parsed = json.loads(last_line)
+                                                result_str = parsed.get("response")
+                                                if result_str:
+                                                    await db.execute("UPDATE tasks SET result = ? WHERE id = ?", (result_str, task_id))
+                                                    await db.commit()
+                                    except Exception:
+                                        pass
+                                        
                                     fin_text = (
-                                        f"{icon} <b>Task #{task_id} COMPLETED</b>\n\n"
-                                        f"Duration: {dur_str}\n"
-                                        f"Exit code: {exit_code}\n"
-                                        f"Log: <code>{log_file_path.name}</code>"
+                                        f"{icon} <b>TASK #{task_id} COMPLETED</b>\n\n"
+                                        f"📁 <b>Project</b>\n{project}\n\n"
+                                        f"🤖 <b>Agent</b>\nAntigravity\n\n"
+                                        f"⏱ <b>Duration</b>\n{dur_str}\n\n"
                                     )
+                                    if result_str:
+                                        short_res = result_str if len(result_str) < 800 else result_str[:800] + "...(truncated)"
+                                        fin_text += f"📝 <b>Result</b>\n<pre>{short_res}</pre>\n\n"
+
                                     keyboard = [[InlineKeyboardButton("🔁 Retry", callback_data=f"retry_{task_id}")]] if status != 'SUCCESS' else []
                                     notify = await get_notify_preference(ALLOWED_USER_ID)
                                     if notify or status != 'SUCCESS':
@@ -1019,7 +1194,31 @@ def main():
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
-    await health(update, context)
+    user_id = update.effective_user.id
+    active_proj = await get_active_project(user_id) or "None"
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT COUNT(*) FROM tasks WHERE status = 'RUNNING'") as c:
+            running = (await c.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM tasks WHERE status = 'PENDING'") as c:
+            pending = (await c.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM tasks WHERE status = 'FAILED'") as c:
+            failed = (await c.fetchone())[0]
+        async with db.execute("SELECT id, status FROM tasks ORDER BY id DESC LIMIT 1") as c:
+            row = await c.fetchone()
+            last_task = f"#{row['id']} {row['status']}" if row else "None"
+            
+    msg = (
+        "📊 <b>CONTROL PLANE STATUS</b>\n\n"
+        "🟢 Online\n\n"
+        f"<b>Current Project:</b>\n{active_proj}\n\n"
+        f"<b>Queue:</b>\nRunning: {running}\nPending: {pending}\nFailed: {failed}\n\n"
+        "<b>Agent:</b>\nAntigravity READY\n\n"
+        f"<b>Last Task:</b>\n{last_task}"
+    )
+    await update.message.reply_html(msg)
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1035,6 +1234,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_id = data.split("_")[1]
         context.args = [task_id]
         await cancel_command(update, context)
+        
+    elif data.startswith("result_"):
+        task_id = data.split("_")[1]
+        await task_result_command(update, context, task_id)
+        
+    elif data.startswith("log_"):
+        task_id = data.split("_")[1]
+        await send_log_command(update, context, task_id)
         
     elif data.startswith("set_active_"):
         project = data.replace("set_active_", "")
