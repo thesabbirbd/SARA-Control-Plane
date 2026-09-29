@@ -21,7 +21,7 @@ while true; do
     TASK_ID=$(sqlite3 "$DB_PATH" "SELECT id FROM tasks WHERE status IN ('RUNNING', 'STARTING') ORDER BY id DESC LIMIT 1;")
     
     if [ -n "$TASK_ID" ]; then
-        LOG_FILE="${PROJECT_ROOT}/logs/task_${TASK_ID}.log"
+        LOG_FILE="$PROJECT_ROOT/logs/task_${TASK_ID}.log"
         
         if [ "$CURRENT_LOG" != "$LOG_FILE" ]; then
             # New task found!
