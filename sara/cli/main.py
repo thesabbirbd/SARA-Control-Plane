@@ -9,6 +9,15 @@ async def run_cli():
     ctx_parser = subparsers.add_parser("context", help="Inspect project context")
     ctx_parser.add_argument("project", help="Project name")
 
+    github_parser = subparsers.add_parser("github", help="GitHub Operations")
+    github_subparsers = github_parser.add_subparsers(dest="gh_cmd")
+    
+    gh_fleet = github_subparsers.add_parser("fleet", help="Manage GitHub Fleet")
+    gh_fleet.add_argument("--dry-run", action="store_true", help="Preview fleet changes")
+    
+    gh_id = github_subparsers.add_parser("identity", help="Check GitHub Identity")
+
+
     
     # Task commands
     task_parser = subparsers.add_parser("task", help="Manage tasks")
@@ -35,6 +44,31 @@ async def run_cli():
         import json
         builder = ProjectContextBuilder("/home/thesabbir/Documents/RPA Projects", args.project)
         print(json.dumps(builder.build_context(), indent=2))
+        return 0
+
+    elif args.command == "github":
+        import asyncio
+        from sara.github.provider import GitHubProvider
+        from sara.github.fleet import FleetManager
+        
+        provider = GitHubProvider()
+        
+        if args.gh_cmd == "identity":
+            ident = await provider.get_identity()
+            print(f"GitHub: {'🟢' if ident['status'] == 'Connected' else '🔴'} {ident['status']}")
+            print(f"Account: {ident['user']}")
+        elif args.gh_cmd == "fleet":
+            fleet = FleetManager(provider)
+            stats = await fleet.analyze_fleet()
+            print("🐙 GITHUB ENGINEERING REPORT")
+            print(f"Repos: {stats['total_repos']} discovered")
+            print(f"Dependabot: {stats['dependabot_configured']} configured")
+            print(f"CodeRabbit: {stats['coderabbit_connected']} connected")
+            print(f"Sonar: {stats['sonar_connected']} connected")
+            print(f"Jules: {'AVAILABLE' if stats['jules_available'] else 'NOT CONFIGURED'}")
+            
+            if args.dry_run:
+                print("\n[DRY RUN] Would evaluate repository policies without mutating.")
         return 0
     else:
         parser.print_help()
