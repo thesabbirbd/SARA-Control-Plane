@@ -95,6 +95,30 @@ async def startup_recovery():
                 await transition_task(db, t['id'], "INTERRUPTED")
         await db.commit()
 
+
+async def update_task_states():
+    while True:
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                # Mark as READY if dependencies met
+                await db.execute('''
+                    UPDATE tasks 
+                    SET status = 'READY' 
+                    WHERE status IN ('PENDING', 'BLOCKED_BY_DEPENDENCY')
+                    AND (depends_on IS NULL OR depends_on IN (SELECT id FROM tasks WHERE status = 'SUCCESS'))
+                ''')
+                # Mark as BLOCKED_BY_DEPENDENCY if dependencies not met
+                await db.execute('''
+                    UPDATE tasks 
+                    SET status = 'BLOCKED_BY_DEPENDENCY' 
+                    WHERE status IN ('PENDING', 'READY')
+                    AND depends_on IS NOT NULL 
+                    AND depends_on NOT IN (SELECT id FROM tasks WHERE status = 'SUCCESS')
+                ''')
+                await db.commit()
+        except: pass
+        await asyncio.sleep(5)
+
 async def stale_task_recovery():
     while True:
         try:
@@ -301,6 +325,43 @@ async def list_projects_command(update: Update, context: ContextTypes.DEFAULT_TY
         keyboard.append([InlineKeyboardButton(f"⭐ Set Active: {p}", callback_data=f"set_active_{p}")])
         
     await (update.message or update.callback_query.message).reply_html(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def workflow_command(update, context):
+    if not authorized(update): return
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_html("Usage: <code>/workflow &lt;project&gt; &lt;plan_file.md&gt;</code>")
+        return
+        
+    project = args[0]
+    plan_file = " ".join(args[1:])
+    
+    import uuid
+    workflow_id = str(uuid.uuid4())[:8]
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        
+        # Read plan (mock reading logic, since in reality we'd parse the markdown)
+        tasks_to_create = [
+            f"Read {plan_file} and extract objective 1",
+            "Implement objective 1 based on previous research",
+            "Run tests for objective 1 and fix any issues"
+        ]
+        
+        prev_id = None
+        for i, task_instr in enumerate(tasks_to_create):
+            await db.execute(
+                "INSERT INTO tasks (project_name, instruction, chat_id, message_id, status, depends_on, workflow_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (project, task_instr, update.message.chat_id, update.message.message_id, "PENDING", prev_id, workflow_id)
+            )
+            async with db.execute("SELECT last_insert_rowid()") as c:
+                prev_id = (await c.fetchone())[0]
+        await db.commit()
+        
+    await update.message.reply_html(f"📦 <b>WORKFLOW #{workflow_id} CREATED</b>\n\nProject: {project}\nFile: {plan_file}\nTasks created: {len(tasks_to_create)}\n\nExecution will proceed sequentially.")
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update): return
@@ -843,6 +904,34 @@ async def debug_task_command(update, context):
         task_id = args[1]
     else:
         task_id = args[0]
+    if args[0] == "session" and len(args) > 1:
+        session_id = args[1]
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM agent_sessions WHERE id = ?", (session_id,)) as c:
+                row = await c.fetchone()
+        if not row:
+            await update.message.reply_html("Session not found.")
+            return
+        msg = f"🔍 <b>DEBUG SESSION {session_id[:8]}</b>\n\nProject: {row['project_name']}\nProvider: {row['provider']}\nCreated: {row['created_at']}\nLast Active: {row['last_active_at']}\nStatus: {row['status']}"
+        await update.message.reply_html(msg)
+        return
+
+    if args[0] == "workflow" and len(args) > 1:
+        workflow_id = args[1]
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT id, status, instruction FROM tasks WHERE workflow_id = ? ORDER BY id ASC", (workflow_id,)) as c:
+                rows = await c.fetchall()
+        if not rows:
+            await update.message.reply_html("Workflow not found.")
+            return
+        msg = f"🔍 <b>DEBUG WORKFLOW {workflow_id}</b>\n\n"
+        for r in rows:
+            msg += f"Task #{r['id']}: {r['status']} - {r['instruction'][:20]}...\n"
+        await update.message.reply_html(msg)
+        return
+
         
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -1033,7 +1122,7 @@ async def background_worker():
                         is_paused = row and row[0] == 'true'
                     task = None
                     if not is_paused:
-                        async with db.execute("SELECT * FROM tasks WHERE status = 'PENDING' AND (next_attempt IS NULL OR next_attempt <= CURRENT_TIMESTAMP) AND (depends_on IS NULL OR depends_on IN (SELECT id FROM tasks WHERE status = 'SUCCESS')) ORDER BY CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 WHEN 'low' THEN 4 ELSE 3 END, created_at ASC LIMIT 1") as cursor:
+                        async with db.execute("SELECT * FROM tasks WHERE status = 'READY' AND (next_attempt IS NULL OR next_attempt <= CURRENT_TIMESTAMP) ORDER BY CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 WHEN 'low' THEN 4 ELSE 3 END, created_at ASC LIMIT 1") as cursor:
                             task = await cursor.fetchone()
                     
                     if task:
@@ -1041,10 +1130,20 @@ async def background_worker():
                         project = task['project_name']
                         instruction = task['instruction']
                         
-                        async with db.execute("UPDATE tasks SET status = 'STARTING', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'PENDING'", (task_id,)) as update_cursor:
+                        async with db.execute("UPDATE tasks SET status = 'STARTING', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'READY'", (task_id,)) as update_cursor:
                             if update_cursor.rowcount == 0:
                                 continue # Task was claimed by another worker or cancelled
+                        
+                        await db.execute("INSERT INTO executions (task_id, attempt, provider) VALUES (?, ?, ?)", (task_id, task['retry_count'] + 1, 'antigravity'))
+                        async with db.execute("SELECT last_insert_rowid()") as cursor:
+                            execution_id = (await cursor.fetchone())[0]
                         await db.commit()
+                        
+                        import sys
+                        sys.path.append(str(Path(__file__).parent.parent))
+                        from sara.events.bus import publish_event
+                        await publish_event("TASK", task_id, "TASK_STARTED", {"execution_id": execution_id})
+
                         
                         import time, json
                         start_time = datetime.now()
@@ -1083,23 +1182,17 @@ async def background_worker():
                             await db.commit()
                             continue
                             
-                        # Helper to stream output
-                        async def stream_output(stream, log_file, prefix=""):
-                            async for line in stream:
-                                decoded = line.decode('utf-8', errors='replace')
-                                log_file.write(decoded)
-                                log_file.flush()
-                                os.fsync(log_file.fileno())
-                                print(f"{prefix}{decoded}", end="", flush=True)
-
                         with open(log_file_path, "a") as log_file:
                             log_file.write(f"\n\n--- STARTING TASK #{task_id} AT {datetime.now()} ---\n")
                             log_file.write(f"Project: {project}\nInstruction: {instruction}\n")
                             log_file.flush()
                             
+                            agy_args = ["-p", instruction, "--output-format", "stream-json", "--print-timeout", "30m", "--dangerously-skip-permissions"]
+                            if tel.get('session_id'):
+                                agy_args.extend(["--conversation", tel['session_id']])
+                                
                             process = await asyncio.create_subprocess_exec(
-                                AGY_BIN, "-p", instruction, "--output-format", "json",
-                                "--print-timeout", "30m", "--dangerously-skip-permissions",
+                                AGY_BIN, *agy_args,
                                 cwd=str(project_dir),
                                 stdout=asyncio.subprocess.PIPE,
                                 stderr=asyncio.subprocess.PIPE,
@@ -1109,13 +1202,82 @@ async def background_worker():
                             await transition_task(db, task_id, "RUNNING", pid=process.pid)
                             await db.commit()
                             
+                            start_msg_obj = None
                             try:
                                 msg_text = msg_text.replace("Running...", f"PID:\n{process.pid}\n\nLive activity:\nRunning...")
-                                await bot_app.bot.send_message(chat_id=ALLOWED_USER_ID, text=msg_text, parse_mode="HTML")
+                                start_msg_obj = await bot_app.bot.send_message(chat_id=ALLOWED_USER_ID, text=msg_text, parse_mode="HTML")
                             except: pass
                             
-                            # Update PID in message
-                            await bot_app.bot.send_message(chat_id=ALLOWED_USER_ID, text=f"🔧 Task #{task_id} PID: <code>{process.pid}</code>", parse_mode="HTML")
+                            # Helper to stream output
+                            async def stream_output(stream, log_file, prefix=""):
+                                import time, json
+                                last_edit = time.time()
+                                throttle = 15.0 # seconds
+                                
+                                async for line in stream:
+                                    decoded = line.decode('utf-8', errors='replace')
+                                    log_file.write(decoded)
+                                    log_file.flush()
+                                    os.fsync(log_file.fileno())
+                                    print(f"{prefix}{decoded}", end="", flush=True)
+                                    
+                                    try:
+                                        if not decoded.strip(): continue
+                                        event = json.loads(decoded)
+                                        import sys
+                                        sys.path.append(str(Path(__file__).parent.parent))
+                                        from sara.events.bus import publish_event
+                                        
+                                        event_type = event.get('event') or event.get('type')
+                                        
+                                        if event_type == 'init':
+                                            conv_id = event.get('conversation_id')
+                                            if conv_id:
+                                                # Save session_id
+                                                await db.execute("UPDATE executions SET session_id = ? WHERE id = ?", (conv_id, execution_id))
+                                                await db.execute("INSERT INTO agent_sessions (id, project_name, provider) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET last_active_at = CURRENT_TIMESTAMP", (conv_id, project, 'antigravity'))
+                                                await db.commit()
+                                        
+                                        if event_type:
+                                            sara_evt = "AGENT_OUTPUT"
+                                            if event_type == "init": sara_evt = "AGENT_STARTED"
+                                            elif event_type == "step_update": sara_evt = "AGENT_STEP"
+                                            elif event_type == "tool_call": sara_evt = "AGENT_TOOL"
+                                            
+                                            await publish_event("EXECUTION", execution_id, sara_evt, event)
+                                            
+                                        now = time.time()
+                                        if now - last_edit > throttle and start_msg_obj:
+                                            last_edit = now
+                                            
+                                            live_act = "Running..."
+                                            if event_type == "step_update":
+                                                su = event.get('step_update', {})
+                                                st = su.get('step_type', 'unknown')
+                                                live_act = f"🔧 Action: {st}"
+                                            elif event_type == "text":
+                                                live_act = f"💬 Outputting text..."
+                                            elif event_type == "result":
+                                                live_act = f"✅ Finishing..."
+                                            
+                                            
+                                            dur = int(now - agent_start)
+                                            dur_str = f"{dur // 60}m {dur % 60}s"
+                                            
+                                            new_text = (
+                                                f"🚀 <b>TASK #{task_id} RUNNING</b>\n\n"
+                                                f"📁 <code>{project}</code>\n"
+                                                f"🤖 Antigravity\n\n"
+                                                f"PID: {process.pid}\n"
+                                                f"Elapsed: {dur_str}\n\n"
+                                                f"Live activity:\n{live_act}"
+                                            )
+                                            try:
+                                                await bot_app.bot.edit_message_text(chat_id=ALLOWED_USER_ID, message_id=start_msg_obj.message_id, text=new_text, parse_mode="HTML")
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        pass
                             
                             # Wait for it, but allow timeouts and cancellations
                             try:
@@ -1161,24 +1323,60 @@ async def background_worker():
                                     tel['telegram_send_ms'] = time.time() * 1000  # just a proxy
                                     tel_str = json.dumps(tel)
                                     await db.execute("UPDATE tasks SET telemetry = ? WHERE id = ?", (tel_str, task_id))
+                                    await db.execute("UPDATE executions SET status = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?", (status, execution_id))
                                     await db.commit()
                                     
-                                    # Attempt to parse last line as JSON for result
+                                    await publish_event("TASK", task_id, f"TASK_{status}", {"execution_id": execution_id, "duration_seconds": duration.seconds})
+                                    
+                                    # Attempt to parse stream-json for result
                                     result_str = None
                                     try:
                                         with open(log_file_path, "r") as lf:
-                                            lines = lf.readlines()
-                                            if lines:
-                                                import json
-                                                last_line = lines[-1].strip()
-                                                parsed = json.loads(last_line)
-                                                result_str = parsed.get("response")
-                                                if result_str:
-                                                    await db.execute("UPDATE tasks SET result = ? WHERE id = ?", (result_str, task_id))
-                                                    await db.commit()
+                                            import json
+                                            for line in reversed(lf.readlines()):
+                                                line = line.strip()
+                                                if not line: continue
+                                                try:
+                                                    parsed = json.loads(line)
+                                                    if parsed.get('event') == 'result' or parsed.get('type') == 'result':
+                                                        result_str = parsed.get("response")
+                                                        if result_str:
+                                                            await db.execute("UPDATE tasks SET result = ? WHERE id = ?", (result_str, task_id))
+                                                        usage = parsed.get('usage', {})
+                                                        if usage:
+                                                            tel['input_tokens'] = usage.get('input_tokens', 0)
+                                                            tel['output_tokens'] = usage.get('output_tokens', 0)
+                                                            tel['cached_tokens'] = usage.get('cached_tokens', 0)
+                                                            await db.execute("UPDATE tasks SET telemetry = ? WHERE id = ?", (json.dumps(tel), task_id))
+                                                        await db.commit()
+                                                        break
+                                                except: pass
                                     except Exception:
                                         pass
                                         
+                                    verification_cmd = task.get('verification_cmd') if 'verification_cmd' in task.keys() else None
+                                    if status == 'SUCCESS' and verification_cmd:
+                                        status = 'VERIFYING'
+                                        await transition_task(db, task_id, status)
+                                        await db.commit()
+                                        
+                                        import subprocess
+                                        try:
+                                            v_out = subprocess.check_output(verification_cmd, shell=True, cwd=str(project_dir), stderr=subprocess.STDOUT, text=True)
+                                            status = 'SUCCESS'
+                                        except subprocess.CalledProcessError as e:
+                                            v_attempts = task.get('verification_attempts', 0) if 'verification_attempts' in task.keys() else 0
+                                            if v_attempts < 3:
+                                                # Auto-fix loop: Append failure context to instruction, and retry!
+                                                new_instr = task['instruction'] + f"\n\n[VERIFICATION FAILED]\nCommand: {verification_cmd}\nExit code: {e.returncode}\nOutput:\n{e.output[:1000]}"
+                                                await db.execute("UPDATE tasks SET instruction = ?, verification_attempts = verification_attempts + 1, status = 'READY' WHERE id = ?", (new_instr, task_id))
+                                                await db.commit()
+                                                continue # skip the rest of the finish block
+                                            else:
+                                                status = 'FAILED'
+                                                await db.execute("UPDATE tasks SET error_message = ? WHERE id = ?", (f"Verification failed after 3 attempts: {e.output[:500]}", task_id))
+                                                await db.commit()
+
                                     if status == 'DEAD_LETTER':
                                         fin_text = (
                                             f"🚨 <b>TASK #{task_id} MOVED TO DEAD LETTER</b>\n\n"
@@ -1237,6 +1435,7 @@ async def post_init(app: Application):
     await init_db()
     await startup_recovery()
     asyncio.create_task(stale_task_recovery())
+    asyncio.create_task(update_task_states())
         # Start Scheduler
     global scheduler
     scheduler = AsyncIOScheduler()
@@ -1258,6 +1457,7 @@ def main():
     bot_app.add_handler(CommandHandler("projects", list_projects_command))
     bot_app.add_handler(CommandHandler("status", status_command))
     bot_app.add_handler(CommandHandler("schedule", schedule_task_command))
+    bot_app.add_handler(CommandHandler("workflow", workflow_command))
     bot_app.add_handler(CommandHandler("tasks", tasks_command))
     bot_app.add_handler(CommandHandler("history", history_command))
     bot_app.add_handler(CommandHandler("debug", debug_task_command))

@@ -22,7 +22,8 @@ RULES:
 4. PROJECT_INTELLIGENCE: what changed, latest progress, project status -> {{"action": "project_update"}}
 5. ARTIFACT: send log, show output -> {{"action": "send_log", "task_id": <id>}} or {{"action": "task_result", "task_id": <id>}}
 6. SCHEDULING: run at 11pm -> {{"action": "schedule"}}
-7. DEVELOPMENT: explicitly asking to write code, fix bugs, create files, run scripts, test things. -> {{"action": "run_antigravity", "project": "{current_project or 'null'}", "instruction": "..."}}
+7. CONTINUE: 'Continue', 'Go on' -> {"action": "continue_task"}
+8. DEVELOPMENT: explicitly asking to write code, fix bugs, create files, run scripts, test things. -> {{"action": "run_antigravity", "project": "{current_project or 'null'}", "instruction": "..."}}
 8. UNKNOWN: ambiguous -> {{"action": "clarify", "message": "Can you clarify?"}}
 
 User Input: '{redact(user_text)}'
