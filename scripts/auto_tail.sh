@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-DB_PATH="/home/thesabbir/Documents/RPA Projects/project-sara/queue.db"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DB_PATH="${SARA_DB_PATH:-$PROJECT_ROOT/queue.db}"
 
 CURRENT_LOG=""
 TAIL_PID=""
@@ -20,7 +21,7 @@ while true; do
     TASK_ID=$(sqlite3 "$DB_PATH" "SELECT id FROM tasks WHERE status IN ('RUNNING', 'STARTING') ORDER BY id DESC LIMIT 1;")
     
     if [ -n "$TASK_ID" ]; then
-        LOG_FILE="/home/thesabbir/Documents/RPA Projects/project-sara/logs/task_${TASK_ID}.log"
+        LOG_FILE="$PROJECT_ROOT/logs/task_${TASK_ID}.log"
         
         if [ "$CURRENT_LOG" != "$LOG_FILE" ]; then
             # New task found!

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+import os
 import sqlite3
 import sys
 
-DB_PATH = "/home/thesabbir/Documents/RPA Projects/project-sara/queue.db"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+DB_PATH = os.environ.get("SARA_DB_PATH", os.path.join(PROJECT_ROOT, "queue.db"))
 
 def main():
     try:
