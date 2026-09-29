@@ -1,7 +1,12 @@
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from sara.config.settings import settings
+from sara.security.risk import classify_command, RiskLevel
+from sara.security.redaction import redact
 scheduler = None
 import asyncio
 import json
-import os
 import re
 import signal
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -26,11 +31,9 @@ from telegram.ext import (
 
 load_dotenv()
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_ID = int(os.environ.get("TELEGRAM_ALLOWED_USER_ID", 0))
 AGY_BIN = os.getenv("ANTIGRAVITY_BIN", "agy")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/chat")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:2b")
 
 # Determine base paths dynamically
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -971,12 +974,12 @@ async def post_init(app: Application):
     asyncio.create_task(background_worker())
 
 def main():
-    if not BOT_TOKEN:
-        print("ERROR: TELEGRAM_BOT_TOKEN not set!")
+    if not settings.telegram_bot_token:
+        print("ERROR: TELEGRAM_settings.telegram_bot_token not set!")
         return
         
     global bot_app
-    bot_app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    bot_app = Application.builder().token(settings.telegram_bot_token).post_init(post_init).build()
 
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(CommandHandler("help", help_command))

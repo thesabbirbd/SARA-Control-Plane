@@ -16,3 +16,6 @@ SQLAlchemy==2.0.54
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 tzlocal==5.4.4
+aiosqlite
+psutil
+pyyaml
