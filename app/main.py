@@ -90,9 +90,9 @@ async def startup_recovery():
         async with db.execute("SELECT * FROM tasks WHERE status IN ('RUNNING', 'STARTING')") as cursor:
             tasks = await cursor.fetchall()
             
-        for t in tasks:
-            if not is_process_alive(t['pid']):
-                await transition_task(db, t['id'], "INTERRUPTED")
+        interrupted_ids = [t['id'] for t in tasks if not is_process_alive(t['pid'])]
+        if interrupted_ids:
+            await transition_task_bulk(db, interrupted_ids, "INTERRUPTED")
         await db.commit()
 
 async def stale_task_recovery():
@@ -102,9 +102,9 @@ async def stale_task_recovery():
                 db.row_factory = aiosqlite.Row
                 async with db.execute("SELECT * FROM tasks WHERE status = 'RUNNING'") as cursor:
                     tasks = await cursor.fetchall()
-                for t in tasks:
-                    if not is_process_alive(t['pid']):
-                        await transition_task(db, t['id'], "INTERRUPTED")
+                interrupted_ids = [t['id'] for t in tasks if not is_process_alive(t['pid'])]
+                if interrupted_ids:
+                    await transition_task_bulk(db, interrupted_ids, "INTERRUPTED")
                 await db.commit()
         except Exception as e:
             print("Stale recovery error:", e)
@@ -333,6 +333,30 @@ VALID_TRANSITIONS = {
     'CANCELLED': ['PENDING'],
     'INTERRUPTED': ['PENDING']
 }
+
+async def transition_task_bulk(db, task_ids: list[int], new_status: str):
+    if not task_ids:
+        return
+
+    # In bulk operations (like bulk INTERRUPTED for dead processes),
+    # we usually assume the caller knows what they are doing (they checked that the status is RUNNING/STARTING).
+    # Since sqlite doesn't allow easy bulk selection and logic for individual transitions within executemany,
+    # we apply the known common updates.
+    updates = ["status = ?"]
+    params = [new_status]
+
+    if new_status == 'STARTING':
+        updates.append("started_at = CURRENT_TIMESTAMP")
+    if new_status in ['SUCCESS', 'FAILED', 'TIMEOUT', 'CANCELLED', 'INTERRUPTED']:
+        updates.append("finished_at = CURRENT_TIMESTAMP")
+
+    query = f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?"
+
+    # Executemany requires a list of tuples where the id is appended
+    executemany_params = [tuple(params + [tid]) for tid in task_ids]
+
+    await db.executemany(query, executemany_params)
+    await db.commit()
 
 async def transition_task(db, task_id: int, new_status: str, pid: int = None, exit_code: int = None, error_msg: str = None):
     async with db.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)) as c:
