@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-SESSION_NAME="sabbir-control"
-PROJECT_DIR="/home/thesabbir/Documents/RPA Projects/sabbiR-control-plane"
+SESSION_NAME="sara-console"
+PROJECT_DIR="/home/thesabbir/Documents/RPA Projects/project-sara"
 
 if ! command -v tmux &> /dev/null; then
     echo "tmux is not installed. Please install it with: sudo apt install tmux"
@@ -20,7 +20,7 @@ if [ $? != 0 ]; then
     tmux new-session -d -s "$SESSION_NAME" -c "$PROJECT_DIR"
     
     # Pane 1 (Top): Service Log
-    tmux send-keys -t "$SESSION_NAME:0" "journalctl --user -u sabbir-bot -f" C-m
+    tmux send-keys -t "$SESSION_NAME:0" "journalctl --user -u sara.service -f" C-m
     
     # Split horizontally (Top / Bottom)
     tmux split-window -h -t "$SESSION_NAME:0"

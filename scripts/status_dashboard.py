@@ -28,7 +28,7 @@ def main():
     cpu, ram, disk = get_system_stats()
     
     # Check services
-    worker_status = check_service("Worker", "systemctl --user is-active sabbir-bot")
+    worker_status = check_service("Worker", "systemctl --user is-active sara.service")
     gemini_key = os.environ.get("GEMINI_API_KEY", "MISSING")
     gemini_status = check_service("Gemini", f"curl -s 'https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key}' > /dev/null")
     agy_status = "🟢 READY" if os.path.exists("/snap/bin/agy") or shutil.which("agy") else "🔴 UNAVAILABLE"

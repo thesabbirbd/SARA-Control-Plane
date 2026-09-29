@@ -1,8 +1,10 @@
+scheduler = None
 import asyncio
 import json
 import os
 import re
 import signal
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import aiosqlite
 import random
 import psutil
@@ -87,7 +89,7 @@ async def startup_recovery():
             
         for t in tasks:
             if not is_process_alive(t['pid']):
-                await db.execute("UPDATE tasks SET status = 'INTERRUPTED' WHERE id = ?", (t['id'],))
+                await transition_task(db, t['id'], "INTERRUPTED")
         await db.commit()
 
 async def stale_task_recovery():
@@ -99,7 +101,7 @@ async def stale_task_recovery():
                     tasks = await cursor.fetchall()
                 for t in tasks:
                     if not is_process_alive(t['pid']):
-                        await db.execute("UPDATE tasks SET status = 'INTERRUPTED' WHERE id = ?", (t['id'],))
+                        await transition_task(db, t['id'], "INTERRUPTED")
                 await db.commit()
         except Exception as e:
             print("Stale recovery error:", e)
@@ -190,46 +192,24 @@ def resolve_project_alias(text: str) -> str:
 
 def deterministic_router(user_text: str):
     text = user_text.lower().strip()
-    
-    # About
-    if text in ["who are you", "what are you", "what is this bot"]:
-        return {"action": "about"}
-        
-    # Help
-    if text in ["help", "what can you do", "show commands"]:
-        return {"action": "help"}
-        
-    # System Status
-    if any(phrase in text for phrase in ["system status", "system health", "how is the system", "how is my laptop", "is the bot online", "check system"]):
-        if not "task" in text and not "project" in text:
-            return {"action": "system_status"}
-            
-    # List Tasks
-    if any(phrase in text for phrase in ["show tasks", "what tasks are running", "what is queued", "queue status", "pending tasks", "what is running"]):
-        return {"action": "list_tasks"}
-        
-    # Task Status
-    task_status_match = re.search(r'(?:status for task(?: id)?|what is task|how is task|what\'s happening with task)\s+(\d+)', text)
-    if task_status_match:
-        return {"action": "task_status", "task_id": int(task_status_match.group(1))}
-        
-    # Project Status
-    project_status_match = re.search(r'(?:status for|how is|what is happening in|show status of)\s+([a-z0-9_-]+)', text)
-    if project_status_match:
-        p = resolve_project_alias(project_status_match.group(1))
-        if p:
-            return {"action": "project_status", "project": p}
-            
-    # Cancel Task
-    cancel_match = re.search(r'(?:cancel|stop)(?: task)?\s+(\d+)', text)
-    if cancel_match:
-        return {"action": "cancel_task", "task_id": int(cancel_match.group(1))}
-        
-    # Retry Task
-    retry_match = re.search(r'(?:retry|run again)(?: task)?\s+(\d+)', text)
-    if retry_match:
-        return {"action": "retry_task", "task_id": int(retry_match.group(1))}
-        
+    if text in ["help", "/help"]: return {"action": "help"}
+    if text in ["start", "/start"]: return {"action": "start"}
+    if text in ["status", "/status", "system status"]: return {"action": "system_status"}
+    if text in ["tasks", "/tasks", "queue", "show tasks"]: return {"action": "list_tasks"}
+    if text in ["history", "/history"]: return {"action": "history"}
+    if text in ["projects", "/projects"]: return {"action": "list_projects"}
+    if text in ["health", "/health"]: return {"action": "system_status"}
+    if text in ["about", "/about"]: return {"action": "about"}
+    m = re.match(r'^(?:task )?status(?:\s+for)?\s+(?:task\s+)?(\d+)$', text)
+    if m: return {"action": "task_status", "task_id": int(m.group(1))}
+    m = re.match(r'^(?:cancel|stop)(?:\s+task)?\s+(\d+)$', text)
+    if m: return {"action": "cancel_task", "task_id": int(m.group(1))}
+    m = re.match(r'^(?:retry|run again)(?:\s+task)?\s+(\d+)$', text)
+    if m: return {"action": "retry_task", "task_id": int(m.group(1))}
+    m = re.match(r'^(?:project )?status(?:\s+for)?\s+([a-z0-9_-]+)$', text)
+    if m:
+        p = resolve_project_alias(m.group(1))
+        if p: return {"action": "project_status", "project": p}
     return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -298,6 +278,50 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_html(text)
 
+
+VALID_TRANSITIONS = {
+    'PENDING': ['STARTING', 'CANCELLED'],
+    'STARTING': ['RUNNING', 'FAILED', 'CANCELLED', 'INTERRUPTED'],
+    'RUNNING': ['SUCCESS', 'FAILED', 'TIMEOUT', 'CANCELLED', 'INTERRUPTED'],
+    'SUCCESS': [],
+    'FAILED': ['PENDING'],
+    'TIMEOUT': ['PENDING'],
+    'CANCELLED': ['PENDING'],
+    'INTERRUPTED': ['PENDING']
+}
+
+async def transition_task(db, task_id: int, new_status: str, pid: int = None, exit_code: int = None, error_msg: str = None):
+    async with db.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)) as c:
+        row = await c.fetchone()
+        if not row: raise ValueError(f"Task {task_id} not found")
+        current_status = row[0]
+        
+    if new_status not in VALID_TRANSITIONS.get(current_status, []) and new_status != 'PENDING':
+        raise ValueError(f"Illegal transition: {current_status} -> {new_status}")
+            
+    updates = ["status = ?"]
+    params = [new_status]
+    
+    if pid is not None:
+        updates.append("pid = ?")
+        params.append(pid)
+    if exit_code is not None:
+        updates.append("exit_code = ?")
+        params.append(exit_code)
+    if error_msg is not None:
+        updates.append("error_message = ?")
+        params.append(error_msg)
+    if new_status == 'STARTING':
+        updates.append("started_at = CURRENT_TIMESTAMP")
+    if new_status in ['SUCCESS', 'FAILED', 'TIMEOUT', 'CANCELLED', 'INTERRUPTED']:
+        updates.append("finished_at = CURRENT_TIMESTAMP")
+        
+    query = f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?"
+    params.append(task_id)
+    
+    await db.execute(query, tuple(params))
+    await db.commit()
+
 async def queue_task(update: Update, project: str, instruction: str):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
@@ -330,16 +354,18 @@ async def parse_intent_with_gemini(user_text: str, current_project: str = None) 
     allowed = ", ".join(get_projects()) or "none yet"
     prompt = (
         "You are an intelligent NLP command router for a Telegram bot managing a DevOps automation system. "
-        "Analyze the user's input and output ONLY a valid JSON object. Do not add markdown blocks or conversational text. "
-        "ROUTING RULES: "
+        "Analyze the user's input and output ONLY a valid JSON object. Do not add markdown blocks or conversational text.\n"
+        "ROUTING RULES:\n"
         "1. If they want to run code/tests/tasks, output: "
-        "   {\"action\": \"run_antigravity\", \"project\": \"<project_name>\", \"instruction\": \"<the instruction>\"} "
-        f"   (Allowed projects are {allowed}. If they don't mention a project but imply coding, use '{current_project}' if available, else ask them to specify.) "
-        "2. If they ask for system status, updates on tasks, or queue status, output: {\"action\": \"system_status\"} "
-        "3. If they want to cancel a task, output: {\"action\": \"cancel_task\", \"task_id\": <id>} "
-        "4. If they just say hi, swear, ask how you are, or say something conversational, output: "
-        "   {\"action\": \"chat\", \"message\": \"<a witty, short, in-character response as an AI>\"} "
-        "5. Otherwise, output {\"action\": \"unknown\"} "
+        "{\"action\": \"run_antigravity\", \"project\": \"<project_name>\", \"instruction\": \"<the instruction>\"} "
+        f"   (Allowed projects: {allowed}. If they don't mention a project but imply coding, use '{current_project}' if available, else ask them to specify.)\n"
+        "2. If they ask for system status, updates on tasks, or queue status ('what is running'), output: {\"action\": \"list_tasks\"} or {\"action\": \"system_status\"}\n"
+        "3. If they ask for the status of a specific task (e.g. 'status for task 5'), output: {\"action\": \"task_status\", \"task_id\": <id>}\n"
+        "4. If they want to cancel a task, output: {\"action\": \"cancel_task\", \"task_id\": <id>}\n"
+        "5. If they want to retry a task or 'retry the last failed task', output: {\"action\": \"retry_task\", \"task_id\": <id or null for last failed>}\n"
+        "6. If they want to check project status ('what is the status of test01'), output: {\"action\": \"project_status\", \"project\": \"<project>\"}\n"
+        "7. If they just say hi, swear, ask how you are, or say something conversational, output: {\"action\": \"chat\", \"message\": \"<a witty, short, in-character response as an AI>\"}\n"
+        "8. Otherwise, output {\"action\": \"unknown\"}\n"
         f"\nUser Input: '{user_text}'"
     )
 
@@ -484,7 +510,13 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
     elif action == "retry_task":
         task_id = intent.get("task_id")
         if not task_id:
-            await status_msg.edit_text("❌ Could not determine task ID to retry.")
+            async with aiosqlite.connect(DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute("SELECT id FROM tasks WHERE status IN ('FAILED', 'INTERRUPTED') ORDER BY id DESC LIMIT 1") as c:
+                    row = await c.fetchone()
+                    if row: task_id = row['id']
+        if not task_id:
+            await status_msg.edit_text("❌ No failed tasks found to retry.")
             return
         await status_msg.delete()
         context.args = [str(task_id)]
@@ -726,7 +758,7 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 pass
         
-        await db.execute("UPDATE tasks SET status = 'CANCELLED' WHERE id = ?", (task_id,))
+        await transition_task(db, task_id, "CANCELLED")
         await db.commit()
         
     await update.message.reply_html(f"🛑 Task <b>#{task_id}</b> cancelled safely.")
@@ -777,15 +809,20 @@ async def background_worker():
                     active = (await cursor.fetchone())[0]
                     
                 if active == 0:
-                    async with db.execute("SELECT * FROM tasks WHERE status = 'PENDING' ORDER BY created_at ASC LIMIT 1") as cursor:
-                        task = await cursor.fetchone()
+                    async with db.execute("SELECT value FROM system_config WHERE key = 'queue_paused'") as cursor:
+                        row = await cursor.fetchone()
+                        is_paused = row and row[0] == 'true'
+                    task = None
+                    if not is_paused:
+                        async with db.execute("SELECT * FROM tasks WHERE status = 'PENDING' AND (next_attempt IS NULL OR next_attempt <= CURRENT_TIMESTAMP) AND (depends_on IS NULL OR depends_on IN (SELECT id FROM tasks WHERE status = 'SUCCESS')) ORDER BY CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 WHEN 'low' THEN 4 ELSE 3 END, created_at ASC LIMIT 1") as cursor:
+                            task = await cursor.fetchone()
                     
                     if task:
                         task_id = task['id']
                         project = task['project_name']
                         instruction = task['instruction']
                         
-                        await db.execute("UPDATE tasks SET status = 'STARTING', started_at = CURRENT_TIMESTAMP WHERE id = ?", (task_id,))
+                        await transition_task(db, task_id, "STARTING")
                         await db.commit()
                         
                         start_time = datetime.now()
@@ -811,7 +848,7 @@ async def background_worker():
                         await db.commit()
                         
                         if not project_dir.exists():
-                            await db.execute("UPDATE tasks SET status = 'FAILED', error_message = ? WHERE id = ?", (f"Project not found: {project_dir}", task_id))
+                            await transition_task(db, task_id, "FAILED", error_msg=f"Project not found: {project_dir}")
                             await db.commit()
                             continue
                             
@@ -838,7 +875,7 @@ async def background_worker():
                                 preexec_fn=os.setsid  # Put in its own process group
                             )
                             
-                            await db.execute("UPDATE tasks SET status = 'RUNNING', pid = ? WHERE id = ?", (process.pid, task_id))
+                            await transition_task(db, task_id, "RUNNING", pid=process.pid)
                             await db.commit()
                             
                             # Update PID in message
@@ -864,8 +901,21 @@ async def background_worker():
                                     pass # Handled by cancel_command
                                 else:
                                     status = 'SUCCESS' if exit_code == 0 else 'FAILED'
-                                    await db.execute("UPDATE tasks SET status = ?, exit_code = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?", (status, exit_code, task_id))
-                                    await db.commit()
+                                    if status == 'FAILED':
+                                        async with db.execute("SELECT retry_count FROM tasks WHERE id = ?", (task_id,)) as rc:
+                                            r_row = await rc.fetchone()
+                                            current_retries = r_row[0] if r_row else 0
+                                        if current_retries < 3:
+                                            delay_mins = [1, 5, 15][current_retries]
+                                            await db.execute(f"UPDATE tasks SET retry_count = retry_count + 1, next_attempt = datetime('now', '+{delay_mins} minutes') WHERE id = ?", (task_id,))
+                                            await transition_task(db, task_id, 'PENDING')
+                                            await db.commit()
+                                        else:
+                                            await transition_task(db, task_id, status, exit_code=exit_code)
+                                            await db.commit()
+                                    else:
+                                        await transition_task(db, task_id, status, exit_code=exit_code)
+                                        await db.commit()
                                     
                                     icon = "✅" if status == 'SUCCESS' else "❌"
                                     duration = datetime.now() - start_time
@@ -892,7 +942,7 @@ async def background_worker():
                                 except Exception:
                                     pass
                                     
-                                await db.execute("UPDATE tasks SET status = 'TIMEOUT', finished_at = CURRENT_TIMESTAMP WHERE id = ?", (task_id,))
+                                await transition_task(db, task_id, "TIMEOUT")
                                 await db.commit()
                                 
                                 await bot_app.bot.send_message(
@@ -912,8 +962,12 @@ async def background_worker():
 async def post_init(app: Application):
     await init_db()
     await startup_recovery()
-    scheduler.start()
     asyncio.create_task(stale_task_recovery())
+        # Start Scheduler
+    global scheduler
+    scheduler = AsyncIOScheduler()
+    scheduler.start()
+    print("APScheduler started.", flush=True)
     asyncio.create_task(background_worker())
 
 def main():

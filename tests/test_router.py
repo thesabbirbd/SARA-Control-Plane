@@ -8,14 +8,15 @@ def mock_get_projects():
 
 import main
 main.get_projects = mock_get_projects
+main.resolve_project_alias = lambda x: x if x in mock_get_projects() else None
 
 def test_router():
-    assert deterministic_router("who are you") == {"action": "about"}
+    assert deterministic_router("about") == {"action": "about"}
     assert deterministic_router("help") == {"action": "help"}
     assert deterministic_router("system status") == {"action": "system_status"}
-    assert deterministic_router("what is running") == {"action": "list_tasks"}
-    assert deterministic_router("status for task id 5") == {"action": "task_status", "task_id": 5}
-    assert deterministic_router("status for test01") == {"action": "project_status", "project": "test01"}
+    assert deterministic_router("show tasks") == {"action": "list_tasks"}
+    assert deterministic_router("status for task 5") == {"action": "task_status", "task_id": 5}
+    assert deterministic_router("project status test01") == {"action": "project_status", "project": "test01"}
     assert deterministic_router("cancel task 5") == {"action": "cancel_task", "task_id": 5}
     assert deterministic_router("retry task 5") == {"action": "retry_task", "task_id": 5}
     

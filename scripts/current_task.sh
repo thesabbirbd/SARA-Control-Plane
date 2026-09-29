@@ -2,7 +2,7 @@
 import sqlite3
 import sys
 
-DB_PATH = "/home/thesabbir/Documents/RPA Projects/sabbiR-control-plane/queue.db"
+DB_PATH = "/home/thesabbir/Documents/RPA Projects/project-sara/queue.db"
 
 def main():
     try:

@@ -6,7 +6,7 @@ if [ -z "$1" ]; then
 fi
 
 TASK_ID=$1
-LOG_FILE="/home/thesabbir/Documents/RPA Projects/sabbiR-control-plane/logs/task_${TASK_ID}.log"
+LOG_FILE="/home/thesabbir/Documents/RPA Projects/project-sara/logs/task_${TASK_ID}.log"
 
 echo "======================================"
 echo "    FOLLOWING TASK #$TASK_ID LOG      "
