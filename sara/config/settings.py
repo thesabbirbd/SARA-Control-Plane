@@ -9,7 +9,7 @@ from typing import List, Optional
 @dataclass
 class Settings:
     sara_env: str = os.getenv("SARA_ENV", "development")
-    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""), repr=False)
     telegram_allowed_user_ids: List[int] = field(default_factory=list)
     default_project: Optional[str] = os.getenv("DEFAULT_PROJECT")
     default_agent: str = os.getenv("DEFAULT_AGENT", "antigravity")
