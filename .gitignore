@@ -1,0 +1,15 @@
+.env
+.env.*
+*.db
+queue.db
+sessions/
+logs/
+*.log
+credentials/
+tokens/
+auth/
+.venv/
+__pycache__/
+*.pyc
+config.toml
+projects.yaml

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=S.A.R.A.
+Comment=System for Autonomous Robotic Actions
+Exec="/home/thesabbir/Documents/RPA Projects/project-sara/start.sh"
+Terminal=true
+Type=Application
+Icon=utilities-terminal
