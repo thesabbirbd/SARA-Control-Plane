@@ -1158,6 +1158,14 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     await (update.message or update.callback_query.message).reply_html(f"🔁 <b>Task Queued for Retry</b>\nOld Task: #{task_id}\nNew Task: #{new_id}\n\n<i>Worker will pick this up shortly.</i>")
 
+
+async def run_web_console():
+    import uvicorn
+    from app.api import app as fastapi_app
+    config = uvicorn.Config(fastapi_app, host="127.0.0.1", port=8080, log_level="warning")
+    server = uvicorn.Server(config)
+    await server.serve()
+
 async def background_worker():
     print("Background worker started.")
     
@@ -1493,6 +1501,7 @@ async def post_init(app: Application):
     await startup_recovery()
     asyncio.create_task(stale_task_recovery())
     asyncio.create_task(update_task_states())
+    asyncio.create_task(run_web_console())
         # Start Scheduler
     global scheduler
     scheduler = AsyncIOScheduler()
@@ -1501,12 +1510,19 @@ async def post_init(app: Application):
     asyncio.create_task(background_worker())
 
 def main():
-    if not settings.telegram_bot_token.get_secret_value():
+    
+    bot_token = settings.telegram_bot_token
+    if hasattr(bot_token, 'get_secret_value'):
+        bot_token_val = bot_token.get_secret_value()
+    else:
+        bot_token_val = bot_token
+    if not bot_token_val:
+
         print("ERROR: TELEGRAM_settings.telegram_bot_token not set!")
         return
         
     global bot_app
-    bot_app = Application.builder().token(settings.telegram_bot_token.get_secret_value()).post_init(post_init).build()
+    bot_app = Application.builder().token(bot_token_val).post_init(post_init).build()
 
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(CommandHandler("help", help_command))

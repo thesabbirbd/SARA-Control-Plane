@@ -6,6 +6,9 @@ from sara.database.core import get_db
 async def run_cli():
     parser = argparse.ArgumentParser(prog="sara", description="SARA Control Plane CLI")
     subparsers = parser.add_subparsers(dest="command")
+    ctx_parser = subparsers.add_parser("context", help="Inspect project context")
+    ctx_parser.add_argument("project", help="Project name")
+
     
     # Task commands
     task_parser = subparsers.add_parser("task", help="Manage tasks")
@@ -26,6 +29,13 @@ async def run_cli():
                         print(f"#{t['id']} [{t['status']}] {t['project_name']}")
         else:
             task_parser.print_help()
+
+    elif args.command == "context":
+        from sara.context.builder import ProjectContextBuilder
+        import json
+        builder = ProjectContextBuilder("/home/thesabbir/Documents/RPA Projects", args.project)
+        print(json.dumps(builder.build_context(), indent=2))
+        return 0
     else:
         parser.print_help()
 

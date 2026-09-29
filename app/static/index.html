@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SARA Control Plane</title>
+    <style>
+        :root { --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --accent: #3b82f6; --success: #10b981; --error: #ef4444; }
+        body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 1rem; margin-bottom: 2rem; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; }
+        .card { background: var(--card); padding: 1.5rem; border-radius: 8px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+        .card h2 { margin-top: 0; color: #94a3b8; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        .stat { font-size: 2.5rem; font-weight: bold; margin: 0.5rem 0; }
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #334155; }
+        th { color: #94a3b8; font-weight: 500; }
+        .badge { display: inline-block; padding: 0.25rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; font-weight: bold; }
+        .badge.SUCCESS { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+        .badge.FAILED, .badge.DEAD_LETTER { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+        .badge.RUNNING { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+        .badge.PENDING, .badge.READY { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+        
+        .tab-nav { display: flex; gap: 1rem; margin-bottom: 1rem; }
+        .tab { padding: 0.5rem 1rem; background: #334155; border-radius: 4px; cursor: pointer; border: none; color: white; }
+        .tab.active { background: var(--accent); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div>
+                <h1 style="margin: 0;">SARA Console</h1>
+                <div style="color: #94a3b8; font-size: 0.875rem;">Self-hosted Agent Relay & Automation • V1.3.100</div>
+            </div>
+            <div>
+                <span class="badge SUCCESS">System Online</span>
+            </div>
+        </header>
+        
+        <div class="grid" style="margin-bottom: 2rem;">
+            <div class="card">
+                <h2>Total Tasks</h2>
+                <div class="stat" id="stat-total">0</div>
+            </div>
+            <div class="card">
+                <h2>Running</h2>
+                <div class="stat" id="stat-running">0</div>
+            </div>
+            <div class="card">
+                <h2>Completed</h2>
+                <div class="stat" id="stat-success">0</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="tab-nav">
+                <button class="tab active">Task Queue</button>
+                <button class="tab">Active Sessions</button>
+            </div>
+            
+            <table id="tasks-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Project</th>
+                        <th>Instruction</th>
+                        <th>Status</th>
+                        <th>Workflow</th>
+                    </tr>
+                </thead>
+                <tbody id="tasks-body">
+                    <tr><td colspan="5">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        async function fetchStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                let total = 0;
+                let running = data['RUNNING'] || 0;
+                let success = data['SUCCESS'] || 0;
+                Object.values(data).forEach(v => total += v);
+                
+                document.getElementById('stat-total').innerText = total;
+                document.getElementById('stat-running').innerText = running;
+                document.getElementById('stat-success').innerText = success;
+            } catch (e) { console.error("Failed to fetch stats", e); }
+        }
+
+        async function fetchTasks() {
+            try {
+                const res = await fetch('/api/tasks');
+                const data = await res.json();
+                const tbody = document.getElementById('tasks-body');
+                tbody.innerHTML = '';
+                
+                data.forEach(task => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>#${task.id}</td>
+                        <td><code>${task.project_name}</code></td>
+                        <td style="max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${task.instruction}</td>
+                        <td><span class="badge ${task.status}">${task.status}</span></td>
+                        <td>${task.workflow_id ? `WF-${task.workflow_id}` : '-'}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (e) { console.error("Failed to fetch tasks", e); }
+        }
+
+        function refresh() {
+            fetchStats();
+            fetchTasks();
+        }
+
+        refresh();
+        setInterval(refresh, 5000); // Auto refresh every 5s
+    </script>
+</body>
+</html>

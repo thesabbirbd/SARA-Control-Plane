@@ -1,78 +1,87 @@
-import sys
-import os
 import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
+import asyncio
 
-# Add app directory to Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../app')))
+import main
 from main import get_git_info
 
-# Using tmp_path fixture provided by pytest instead of mocking
-def test_get_git_info_no_git_dir(tmp_path):
+class MockProcess:
+    def __init__(self, stdout, stderr=b"", returncode=0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+    
+    async def communicate(self):
+        return self.stdout, self.stderr
+
+@pytest.mark.asyncio
+async def test_get_git_info_no_git_dir(tmp_path):
     with patch("main.BASE_DIR", tmp_path):
         project_dir = tmp_path / "test_project"
         project_dir.mkdir()
-        # No .git directory
+        assert await get_git_info("test_project") is None
 
-        # Test original implementation fallback or patched implementation
-        assert get_git_info("test_project") is None
-
-def test_get_git_info_clean(tmp_path):
+@pytest.mark.asyncio
+async def test_get_git_info_clean(tmp_path):
     with patch("main.BASE_DIR", tmp_path):
         project_dir = tmp_path / "test_project"
         project_dir.mkdir()
         (project_dir / ".git").mkdir()
 
-        with patch("subprocess.check_output") as mock_check_output:
-            def side_effect(cmd, **kwargs):
-                if "branch" in cmd:
-                    return b"main\n"
-                elif "status" in cmd:
-                    return b""
-                elif "log" in cmd:
-                    return b"abcdef - Initial commit\n"
-                return b""
-            mock_check_output.side_effect = side_effect
+        async def mock_exec(*args, **kwargs):
+            if "branch" in args:
+                return MockProcess(b"main\n")
+            elif "status" in args:
+                return MockProcess(b"")
+            elif "log" in args:
+                return MockProcess(b"abcdef - Initial commit\n")
+            return MockProcess(b"")
 
-            result = get_git_info("test_project")
+        with patch("main.asyncio.create_subprocess_exec", side_effect=mock_exec):
+            result = await get_git_info("test_project")
             assert result == {
                 "branch": "main",
                 "clean": True,
                 "commit": "abcdef - Initial commit"
             }
 
-def test_get_git_info_dirty(tmp_path):
+@pytest.mark.asyncio
+async def test_get_git_info_dirty(tmp_path):
     with patch("main.BASE_DIR", tmp_path):
         project_dir = tmp_path / "test_project"
         project_dir.mkdir()
         (project_dir / ".git").mkdir()
 
-        with patch("subprocess.check_output") as mock_check_output:
-            def side_effect(cmd, **kwargs):
-                if "branch" in cmd:
-                    return b"main\n"
-                elif "status" in cmd:
-                    return b" M some_file.py\n"
-                elif "log" in cmd:
-                    return b"abcdef - Initial commit\n"
-                return b""
-            mock_check_output.side_effect = side_effect
+        async def mock_exec(*args, **kwargs):
+            if "branch" in args:
+                return MockProcess(b"main\n")
+            elif "status" in args:
+                return MockProcess(b" M some_file.py\n")
+            elif "log" in args:
+                return MockProcess(b"abcdef - Initial commit\n")
+            return MockProcess(b"")
 
-            result = get_git_info("test_project")
+        with patch("main.asyncio.create_subprocess_exec", side_effect=mock_exec):
+            result = await get_git_info("test_project")
             assert result == {
                 "branch": "main",
                 "clean": False,
                 "commit": "abcdef - Initial commit"
             }
 
-def test_get_git_info_exception(tmp_path):
+@pytest.mark.asyncio
+async def test_get_git_info_exception(tmp_path):
     with patch("main.BASE_DIR", tmp_path):
         project_dir = tmp_path / "test_project"
         project_dir.mkdir()
         (project_dir / ".git").mkdir()
 
-        with patch("subprocess.check_output") as mock_check_output:
-            mock_check_output.side_effect = Exception("Git failed")
+        async def mock_exec(*args, **kwargs):
+            raise Exception("Git failed")
 
-            assert get_git_info("test_project") is None
+        with patch("main.asyncio.create_subprocess_exec", side_effect=mock_exec):
+            # In V1.3.50, when an exception happens in create_subprocess_exec, 
+            # get_git_info swallows it and returns default dict.
+            result = await get_git_info("test_project")
+            assert result is None
