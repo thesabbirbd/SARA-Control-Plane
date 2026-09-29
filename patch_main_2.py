@@ -221,7 +221,7 @@ worker_new = """async def background_worker():
                                 cwd=str(project_dir),
                                 stdout=log_file,
                                 stderr=log_file,
-                                preexec_fn=os.setsid  # Put in its own process group
+                                start_new_session=True  # Put in its own process group
                             )
                             
                             await db.execute("UPDATE tasks SET status = 'RUNNING', pid = ? WHERE id = ?", (process.pid, task_id))

@@ -1103,7 +1103,7 @@ async def background_worker():
                                 cwd=str(project_dir),
                                 stdout=asyncio.subprocess.PIPE,
                                 stderr=asyncio.subprocess.PIPE,
-                                preexec_fn=os.setsid  # Put in its own process group
+                                start_new_session=True  # Put in its own process group
                             )
                             
                             await transition_task(db, task_id, "RUNNING", pid=process.pid)
