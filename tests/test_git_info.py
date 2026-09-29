@@ -1,78 +1,78 @@
 import sys
 import os
-import subprocess
-from pathlib import Path
-from unittest.mock import patch, MagicMock
 import pytest
+from unittest.mock import patch, MagicMock
+from pathlib import Path
 
+# Add app directory to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../app')))
 from main import get_git_info
 
+# Using tmp_path fixture provided by pytest instead of mocking
 def test_get_git_info_no_git_dir(tmp_path):
     with patch("main.BASE_DIR", tmp_path):
-        # Create project dir but no .git dir
-        project_dir = tmp_path / "no_git_project"
+        project_dir = tmp_path / "test_project"
         project_dir.mkdir()
-        assert get_git_info("no_git_project") is None
+        # No .git directory
 
-def test_get_git_info_success(tmp_path):
+        # Test original implementation fallback or patched implementation
+        assert get_git_info("test_project") is None
+
+def test_get_git_info_clean(tmp_path):
     with patch("main.BASE_DIR", tmp_path):
-        project_dir = tmp_path / "good_project"
+        project_dir = tmp_path / "test_project"
         project_dir.mkdir()
         (project_dir / ".git").mkdir()
 
         with patch("subprocess.check_output") as mock_check_output:
-            def mock_subprocess_check_output(args, **kwargs):
-                if "branch" in args:
+            def side_effect(cmd, **kwargs):
+                if "branch" in cmd:
                     return b"main\n"
-                elif "status" in args:
+                elif "status" in cmd:
                     return b""
-                elif "log" in args:
-                    return b"abcdef1 - init commit\n"
+                elif "log" in cmd:
+                    return b"abcdef - Initial commit\n"
                 return b""
+            mock_check_output.side_effect = side_effect
 
-            mock_check_output.side_effect = mock_subprocess_check_output
-
-            result = get_git_info("good_project")
+            result = get_git_info("test_project")
             assert result == {
                 "branch": "main",
                 "clean": True,
-                "commit": "abcdef1 - init commit"
+                "commit": "abcdef - Initial commit"
             }
 
-def test_get_git_info_dirty_success(tmp_path):
+def test_get_git_info_dirty(tmp_path):
     with patch("main.BASE_DIR", tmp_path):
-        project_dir = tmp_path / "dirty_project"
+        project_dir = tmp_path / "test_project"
         project_dir.mkdir()
         (project_dir / ".git").mkdir()
 
         with patch("subprocess.check_output") as mock_check_output:
-            def mock_subprocess_check_output(args, **kwargs):
-                if "branch" in args:
-                    return b"dev\n"
-                elif "status" in args:
+            def side_effect(cmd, **kwargs):
+                if "branch" in cmd:
+                    return b"main\n"
+                elif "status" in cmd:
                     return b" M some_file.py\n"
-                elif "log" in args:
-                    return b"1234567 - update\n"
+                elif "log" in cmd:
+                    return b"abcdef - Initial commit\n"
                 return b""
+            mock_check_output.side_effect = side_effect
 
-            mock_check_output.side_effect = mock_subprocess_check_output
-
-            result = get_git_info("dirty_project")
+            result = get_git_info("test_project")
             assert result == {
-                "branch": "dev",
+                "branch": "main",
                 "clean": False,
-                "commit": "1234567 - update"
+                "commit": "abcdef - Initial commit"
             }
 
-def test_get_git_info_subprocess_exception(tmp_path):
+def test_get_git_info_exception(tmp_path):
     with patch("main.BASE_DIR", tmp_path):
-        project_dir = tmp_path / "error_project"
+        project_dir = tmp_path / "test_project"
         project_dir.mkdir()
         (project_dir / ".git").mkdir()
 
         with patch("subprocess.check_output") as mock_check_output:
-            mock_check_output.side_effect = subprocess.CalledProcessError(1, "git")
+            mock_check_output.side_effect = Exception("Git failed")
 
-            result = get_git_info("error_project")
-            assert result is None
+            assert get_git_info("test_project") is None
