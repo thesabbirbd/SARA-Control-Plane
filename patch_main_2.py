@@ -1,4 +1,3 @@
-import re
 import os
 
 MAIN_FILE = "/home/thesabbir/Documents/RPA Projects/sabbiR-control-plane/app/main.py"
