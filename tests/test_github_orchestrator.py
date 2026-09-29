@@ -10,7 +10,8 @@ from sara.integrations.dependabot import DependabotIntegration
 async def test_pr_writer_lock():
     # Setup test DB safely if needed, but we can rely on standard testing practice.
     # We will just test the lock mechanism logic.
-    repo = "test/repo"
+    import uuid
+    repo = f"test/repo-{uuid.uuid4()}"
     pr = 101
     
     # 1. Jules gets the lock

@@ -1,15 +1,11 @@
 # Changelog
 
-## [V1.3.150] - 2026-09-29
+## [V1.3.200] - 2026-09-29
 ### Added
-- GitHub DevSecOps Orchestrator and Fleet Manager.
-- ONE PR = ONE PRIMARY WRITER concurrency lock (`PROrchestrator`).
-- Dependabot, SonarQube Cloud, CodeRabbit, and Jules integrations.
-- Fleet analysis with dry-run capabilities via `sara github fleet --dry-run`.
-- Normalization and deduplication of AI and Security findings (`github_findings` schema).
-- Documentation for DevSecOps, Jules, Dependabot, CodeRabbit, Sonar, Policies, and Fleet workflows.
-
-### Security
-- PR Locking strictly blocks multiple agent writers (e.g., CodeRabbit autofix + Jules repair) from causing race conditions.
-- Default CodeRabbit behavior set to REVIEW-ONLY.
-- GitHub Identity checks isolated and token redaction enforced.
+- CI/CD Intelligence (`CIIntelligence`) with failure signature hashing and max repair cycle protection (default 3 cycles).
+- Pull Request Lifecycle Engine (`PRLifecycle`) aggregating Dependabot, Sonar, CodeRabbit, CodeQL, and Jules check states.
+- Issue Triage Engine (`IssueTriage`) that automatically classifies issues (BUG, FEATURE, SECURITY) and computes dynamic priority based on label and age.
+- Release Engineering (`ReleaseEngine`) that generates changelogs from parsed commit semantics and checks readiness.
+- Fleet Anomalies and Action Journaling (`fleet_journal`).
+- Remote Worker Engine (`WorkerRegistry`) for distributing capabilities (e.g. `docker`, `ollama`, `jules`) across nodes without exposing raw SSH access.
+- Substantial Documentation updates (CI-CD.md, PULL-REQUESTS.md, ISSUES.md, RELEASES.md, REMOTE-WORKERS.md, AGENT-ROUTING.md, ARCHITECTURE.md).
