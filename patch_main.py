@@ -1,5 +1,3 @@
-import re
-
 with open("app/main.py", "r") as f:
     content = f.read()
 
