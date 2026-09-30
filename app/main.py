@@ -1426,9 +1426,27 @@ async def background_worker():
                                         await db.commit()
                                         
                                         import subprocess
+                                        import shlex
                                         try:
-                                            v_out = subprocess.check_output(verification_cmd, shell=True, cwd=str(project_dir), stderr=subprocess.STDOUT, text=True)
-                                            status = 'SUCCESS'
+                                            try:
+                                                cmd_parts = shlex.split(verification_cmd)
+                                                proc = await asyncio.create_subprocess_exec(
+                                                    *cmd_parts,
+                                                    cwd=str(project_dir),
+                                                    stdout=asyncio.subprocess.PIPE,
+                                                    stderr=asyncio.subprocess.STDOUT
+                                                )
+                                                stdout_bytes, _ = await proc.communicate()
+                                                v_out = stdout_bytes.decode(errors='replace')
+
+                                                if proc.returncode == 0:
+                                                    status = 'SUCCESS'
+                                                else:
+                                                    raise subprocess.CalledProcessError(proc.returncode, verification_cmd, output=v_out)
+                                            except Exception as ex:
+                                                if isinstance(ex, subprocess.CalledProcessError):
+                                                    raise
+                                                raise subprocess.CalledProcessError(1, verification_cmd, output=str(ex))
                                         except subprocess.CalledProcessError as e:
                                             v_attempts = task.get('verification_attempts', 0) if 'verification_attempts' in task.keys() else 0
                                             if v_attempts < 3:
