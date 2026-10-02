@@ -18,7 +18,7 @@ def get_system_stats():
 
 def check_service(name, cmd):
     try:
-        subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
+        subprocess.check_output(cmd, stderr=subprocess.STDOUT)
         return "🟢 ONLINE"
     except Exception:
         return "🔴 OFFLINE"
@@ -30,9 +30,10 @@ def main():
     cpu, ram, disk = get_system_stats()
     
     # Check services
-    worker_status = check_service("Worker", "systemctl --user is-active sara.service")
+    worker_status = check_service("Worker", ["systemctl", "--user", "is-active", "sara.service"])
     gemini_key = os.environ.get("GEMINI_API_KEY", "MISSING")
-    gemini_status = check_service("Gemini", f"curl -s 'https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key}' > /dev/null")
+    # Using -f ensures curl exits with non-zero on HTTP errors (like 400 when API key is missing/invalid)
+    gemini_status = check_service("Gemini", ["curl", "-s", "-f", f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key}"])
     agy_status = "🟢 READY" if os.path.exists("/snap/bin/agy") or shutil.which("agy") else "🔴 UNAVAILABLE"
     
     print("══════════════════════════════════════════════")
