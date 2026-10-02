@@ -2,7 +2,6 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sara.config.settings import settings
-from sara.security.risk import classify_command, RiskLevel
 from sara.security.redaction import redact
 scheduler = None
 import asyncio
