@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import aiosqlite
 import os
@@ -8,6 +9,17 @@ import os
 DB_PATH = os.environ.get("SARA_DB_PATH", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "queue.db"))
 
 app = FastAPI(title="SARA Control Plane", version="1.3.100")
+
+cors_origins_env = os.environ.get("SARA_CORS_ORIGINS", "")
+allowed_origins = [origin.strip() for origin in cors_origins_env.split(",")] if cors_origins_env else []
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/api/tasks")
 async def get_tasks():
