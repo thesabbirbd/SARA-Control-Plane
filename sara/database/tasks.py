@@ -1,4 +1,3 @@
-import aiosqlite
 from sara.database.core import get_db
 
 VALID_TRANSITIONS = {
