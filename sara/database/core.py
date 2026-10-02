@@ -1,6 +1,5 @@
 import aiosqlite
 import os
-from pathlib import Path
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PROJECT_ROOT = APP_DIR
