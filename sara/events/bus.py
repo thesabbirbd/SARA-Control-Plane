@@ -1,5 +1,4 @@
 import json
-import asyncio
 from sara.database.core import get_db
 
 _subscribers = []
